@@ -1,0 +1,52 @@
+# R
+.Rhistory
+.Rapp.history
+.RData
+.Ruserdata
+*.Rproj
+.Rproj.user/
+*.Rproj.user/
+
+# Data files (too large for git)
+data/
+*.csv
+*.dbf
+*.shp
+*.shx
+*.prj
+*.cpg
+*.sbn
+*.sbx
+*.zip
+
+# Results
+results/
+*.png
+*.pdf
+*.html
+
+# Temporary files
+*.tmp
+*.log
+*.swp
+*~
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+*.egg-info/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
