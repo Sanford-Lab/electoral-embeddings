@@ -1,0 +1,383 @@
+---
+title: "rf_5cx_&visualizations"
+author: "Chris Sylvester"
+format: html
+editor: visual
+---
+
+```{r}
+
+library(dplyr)
+library(tidyverse)
+library(ranger)
+library(sf)
+library(uuid)
+library(ggplot2)
+library(purrr)
+library(tigris)
+library(mapview)
+library(leaflet)
+library(htmlwidgets)
+library(readr)
+library(Metrics)
+
+```
+
+
+### Predicting full 2020 presidential election using first-pass random forest
+
+```{r}
+
+# read in and filter data
+uuid <- read.csv("data/mixed/2020_precinct_embeddings_uuid.csv")
+
+```
+
+### 5-Fold Cross-Validation with Ranger
+
+```{r}
+
+# 1. Setup Environment
+set.seed(42)
+sf_use_s2(FALSE) # Disable spherical geometry for speed/stability
+
+# ==============================================================================
+# PART 1: 5-Fold Cross Validation (With UUIDs)
+# ==============================================================================
+cat("STEP 1: Running 5-Fold Cross Validation...\n")
+
+# A. Prepare Data (CRITICAL: Added UUIDPKEY to selection)
+#    'uuid' is assumed to be your full dataframe in memory
+data_rf <- uuid %>% 
+  select(UUIDPKEY, TRUMPSHARE, state, TOTALVOTES, A00:A63) %>% 
+  na.omit()
+
+# B. Create Folds
+n_folds <- 5
+n_rows  <- nrow(data_rf)
+folds <- sample(rep(1:n_folds, length.out = n_rows))
+
+data_rf$CV_Predictions <- NA
+
+# C. The Loop
+for (k in 1:n_folds) {
+  cat("  Processing Fold", k, "of", n_folds, "...\n")
+  
+  test_idx  <- which(folds == k)
+  train_idx <- which(folds != k)
+  
+  cv_train <- data_rf[train_idx, ]
+  cv_test  <- data_rf[test_idx, ]
+  
+  # Train (Excluding ID and Prediction column)
+  rf_fold_model <- ranger(
+    TRUMPSHARE ~ .,
+    data       = cv_train %>% select(-CV_Predictions, -UUIDPKEY, -state, -TOTALVOTES), 
+    num.trees  = 500,
+    mtry       = 8,
+    importance = "none",
+    seed       = 42
+  )
+  
+  # Predict
+  preds <- predict(rf_fold_model, data = cv_test)$predictions
+  data_rf$CV_Predictions[test_idx] <- preds
+}
+
+# D. Calculate Error Metrics
+data_rf <- data_rf %>%
+  mutate(
+    # Error Calculation:
+    # If Actual (0.6) > Predicted (0.4) -> Error = +0.2 -> RED
+    # If Actual (0.4) < Predicted (0.6) -> Error = -0.2 -> BLUE
+    Prediction_Error = TRUMPSHARE - CV_Predictions
+  )
+
+cat("CV Complete. R-Squared:", round(cor(data_rf$TRUMPSHARE, data_rf$CV_Predictions)^2, 3), "\n")
+
+```
+
+
+Load and join geometry
+```{r}
+
+cat("\nSTEP 2: Loading Geometry and Joining...\n")
+
+files <- list.files("data/mixed/unzipped_pkey", pattern = "\\.shp$", recursive = TRUE, full.names = TRUE)
+
+# We read only UUID and Geometry (Fast!)
+geo_data <- do.call(rbind, lapply(files, function(f) {
+  st_read(f, quiet = TRUE) %>% 
+    select(UUIDPKEY) %>%      # Keep ONLY the key
+    st_transform(5070)        # Convert to Meters for simplification
+}))
+
+# Join Results to Geometry
+# inner_join ensures we only map precincts where we actually had data/predictions
+map_data <- inner_join(geo_data, data_rf, by = "UUIDPKEY")
+
+
+```
+
+Create 3 maps based on results
+```{r}
+cat("\nSTEP 3: Optimizing for Web...\n")
+
+web_data <- map_data %>%
+  st_simplify(dTolerance = 50) %>%  # 50m simplification for performance
+  st_transform(4326)                # Convert to WGS84 for Leaflet
+
+# ==============================================================================
+# PART 4: Generate the 3 Maps
+# ==============================================================================
+
+# Helper Function to Make Maps DRY (Don't Repeat Yourself)
+create_election_map <- function(data, col_name, file_name, title, is_error_map = FALSE) {
+  
+  cat("Generating", file_name, "...\n")
+  
+  # Define Palette
+  if (is_error_map) {
+    # ERROR MAP: Symmetric scale centered on 0
+    # Determine max error to keep scale balanced (e.g., +/- 0.3)
+    max_err <- max(abs(data[[col_name]]), na.rm = TRUE)
+    domain_range <- c(-max_err, max_err)
+  } else {
+    # NORMAL MAP: 0 to 1 (0% to 100%)
+    domain_range <- c(0, 1)
+  }
+  
+  pal <- colorNumeric(palette = c("blue", "white", "red"), domain = domain_range)
+  
+  # Create Popup Text
+  # We use standard evaluation to pull the variable column dynamically
+  vals <- data[[col_name]]
+  
+  popup_text <- paste0(
+    "<strong>UUID: </strong>", data$UUIDPKEY, "<br>",
+    "<strong>Actual: </strong>", round(data$TRUMPSHARE * 100, 1), "%<br>",
+    "<strong>Predicted: </strong>", round(data$CV_Predictions * 100, 1), "%<br>",
+    "<strong>Error: </strong>", round(data$Prediction_Error * 100, 1), "% pts"
+  )
+  
+  # Build Map
+  m <- leaflet(data, options = leafletOptions(preferCanvas = TRUE)) %>%
+    addProviderTiles(providers$CartoDB.Positron) %>%
+    addPolygons(
+      fillColor = ~pal(vals),
+      fillOpacity = 0.8,
+      color = "white",
+      weight = 0.3,
+      opacity = 1,
+      popup = popup_text,
+      smoothFactor = 1.5,
+      highlightOptions = highlightOptions(weight = 2, color = "#666", bringToFront = TRUE)
+    ) %>%
+    addLegend(
+      position = "bottomright",
+      pal = pal,
+      values = domain_range, # Use the fixed range for the legend
+      title = title,
+      labFormat = labelFormat(suffix = "%", transform = function(x) x * 100)
+    )
+  
+  saveWidget(m, file = file_name, selfcontained = FALSE)
+}
+
+# --- GENERATE MAP 1: ACTUAL ---
+create_election_map(
+  web_data, 
+  col_name = "TRUMPSHARE", 
+  file_name = "map_actual.html", 
+  title = "Actual Trump Share"
+)
+
+# --- GENERATE MAP 2: PREDICTED ---
+create_election_map(
+  web_data, 
+  col_name = "CV_Predictions", 
+  file_name = "map_predicted.html", 
+  title = "Predicted Trump Share"
+)
+
+# --- GENERATE MAP 3: ERROR ---
+# Logic: Red = Actual > Predicted (Underestimated Trump)
+#        Blue = Actual < Predicted (Overestimated Trump)
+create_election_map(
+  web_data, 
+  col_name = "Prediction_Error", 
+  file_name = "map_error.html", 
+  title = "Prediction Error (pts)",
+  is_error_map = TRUE
+)
+
+cat("\nDONE! Created 3 HTML maps + their '_files' folders.")
+```
+Test set performance: 
+R squared: 0.734
+RMSE: 0.1205
+
+
+Predicting 2024 results with 2020-trained model
+```{r}
+
+set.seed(42)
+
+# ==============================================================================
+# 1. Load and Standardize Data
+# ==============================================================================
+
+# --- Train Data (2020) ---
+# Assumes 'uuid' is in memory
+train_data <- uuid %>% 
+  select(TRUMPSHARE, A00:A63) %>% 
+  na.omit()
+
+# --- Test Data (2024) ---
+path_2024 <- "data/precincts/processed_2024_embeddings.csv" 
+raw_2024  <- read_csv(path_2024)
+
+# Rename REPUBSHARE to TRUMPSHARE so the column names match for easier handling
+# (The model doesn't use the target column for prediction, but we need it for RMSE)
+test_data <- raw_2024 %>%
+  select(TRUMPSHARE = REPUBSHARE, A00:A63) %>%
+  na.omit()
+
+cat("Training Rows (2020):", nrow(train_data), "\n")
+cat("Testing Rows (2024): ", nrow(test_data), "\n")
+
+
+# ==============================================================================
+# 2. Train Model (On all 2020 data)
+# ==============================================================================
+
+cat("\nTraining Model on 2020 Data...\n")
+
+rf_model <- ranger(
+  TRUMPSHARE ~ ., 
+  data        = train_data,
+  num.trees   = 500,
+  mtry        = 8,
+  importance  = "none",
+  seed        = 42,
+  num.threads = 4
+)
+
+
+# ==============================================================================
+# 3. Calculate Metrics
+# ==============================================================================
+
+# --- A. Training Metrics (2020 OOB) ---
+train_preds  <- rf_model$predictions
+train_actual <- train_data$TRUMPSHARE
+
+train_r2   <- cor(train_actual, train_preds)^2
+train_rmse <- sqrt(mean((train_actual - train_preds)^2))
+
+
+# --- B. Testing Metrics (2024) ---
+# Predict 2024 values using the 2020 model
+test_preds  <- predict(rf_model, data = test_data)$predictions
+test_actual <- test_data$TRUMPSHARE # This is actually 2024 REPUBSHARE
+
+test_r2   <- cor(test_actual, test_preds)^2
+test_rmse <- sqrt(mean((test_actual - test_preds)^2))
+
+
+# ==============================================================================
+# 4. Output Results
+# ==============================================================================
+
+cat("\n========================================\n")
+cat("MODEL PERFORMANCE SUMMARY\n")
+cat("========================================\n")
+cat(sprintf("TRAINING (2020 OOB) R-Squared: %.4f\n", train_r2))
+cat(sprintf("TRAINING (2020 OOB) RMSE:      %.4f\n", train_rmse))
+cat("----------------------------------------\n")
+cat(sprintf("TESTING  (2024)     R-Squared: %.4f\n", test_r2))
+cat(sprintf("TESTING  (2024)     RMSE:      %.4f\n", test_rmse))
+cat("========================================\n")
+
+```
+
+CSVs of the results
+```{r}
+
+head(data_rf)
+
+data_rf <- data_rf %>%
+  select(UUIDPKEY, state, TOTALVOTES, TRUMPSHARE, CV_Predictions, Prediction_Error)
+
+write_csv(data_rf, "rf_results.csv")
+
+```
+
+
+
+
+```{r}
+# ==========================================
+# Random forest with ranger on embeddings
+# ==========================================
+
+set.seed(10)  # for reproducibility
+
+# Keep only the columns we need and drop NAs
+#    (assumes A00:A63 exist and are the 64 embedding dims)
+data_rf <- uuid %>%
+  select(TRUMPSHARE, TOTALVOTES, A00:A63) %>%
+  na.omit()
+
+# Train/test split (80/20)
+n <- nrow(data_rf)
+train_idx <- sample(seq_len(n), size = floor(0.8 * n))
+
+train_df <- data_rf[train_idx, ]
+test_df  <- data_rf[-train_idx, ]
+
+cat("Train rows:", nrow(train_df), " | Test rows:", nrow(test_df), "\n")
+
+# Fit ranger random forest
+rf_model <- ranger(
+  TRUMPSHARE ~ .,
+  data       = train_df,
+  num.trees  = 500,
+  mtry       = 8,
+  importance = "impurity",   # or "permutation" if you want stricter importance
+  seed       = 42
+)
+
+# Print a brief model summary (includes OOB R²)
+print(rf_model)
+
+# Predict on the test set
+rf_pred <- predict(rf_model, data = test_df)$predictions
+
+# Evaluate performance on the test set
+rss  <- sum((rf_pred - test_df$TRUMPSHARE)^2)
+tss  <- sum((test_df$TRUMPSHARE - mean(test_df$TRUMPSHARE))^2)
+r2   <- 1 - rss / tss
+rmse <- sqrt(mean((rf_pred - test_df$TRUMPSHARE)^2))
+
+cat("\nPerformance on test set:\n")
+cat("R²   =", round(r2, 3), "\n")
+cat("RMSE =", round(rmse, 4), "\n\n")
+
+# Variable importance summary
+imp <- sort(rf_model$variable.importance, decreasing = TRUE)
+
+cat("Top 10 most important features:\n")
+print(round(imp[1:10], 4))
+
+```
+
+```{r}
+simple_model <- ranger(TRUMPSHARE ~ TOTALVOTES, data = train_df)
+print(simple_model$r.squared)
+
+simple <- lm(TRUMPSHARE ~ TOTALVOTES, data = train_df)
+summary(simple)
+
+```
+

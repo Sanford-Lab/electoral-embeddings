@@ -1,0 +1,201 @@
+---
+title: "Primary Key Work"
+author: "Chris Sylvester"
+format: html
+editor: visual
+---
+
+## Quarto
+
+This is the code I used to create the primary keys for the 2020 and 2024 NYT data. I need primary keys in the shapefiles before I upload them to Google Earth Engine, because the geometry is dropped once the embeddings get downloaded in CSV format. I use the CSVs for modeling and predictions, and the primary key is necessary to join back the geometries for visualizing the results later on.
+
+Libraries:
+
+```{r}
+library(sf)
+library(uuid)
+library(dplyr)
+```
+
+### 2020 State Data
+
+Create new version of 2020 state/precinct data with primary key:
+```{r}
+
+# ==============================================================================
+# CONFIGURATION
+# ==============================================================================
+input_root  <- "data/mixed/unzipped"
+output_root <- "data/mixed/unzipped_pkey"
+
+# ==============================================================================
+# PROCESSING SCRIPT
+# ==============================================================================
+
+rel_files <- list.files(
+  path = input_root, 
+  pattern = "\\.shp$", 
+  recursive = TRUE, 
+  full.names = FALSE 
+)
+
+cat("Found", length(rel_files), "Shapefiles.\n")
+cat("Retrying batch process with 3D-Fix...\n\n")
+
+for (i in seq_along(rel_files)) {
+  
+  rel_path  <- rel_files[i]
+  input_path  <- file.path(input_root, rel_path)
+  output_path <- file.path(output_root, rel_path)
+  
+  cat(sprintf("[%d / %d] Processing: %s ... ", i, length(rel_files), rel_path))
+  
+  tryCatch({
+    
+    # A. Read Data
+    geo_data <- st_read(input_path, quiet = TRUE)
+    
+    # B. Add UUIDPKEY
+    if (!"UUIDPKEY" %in% names(geo_data)) {
+      geo_data$UUIDPKEY <- unlist(lapply(1:nrow(geo_data), function(x) UUIDgenerate()))
+    }
+    
+    # *** C.1 THE FIX: FLATTEN TO 2D ***
+    # This removes Z (elevation) and M (measure) dimensions
+    # It solves the "3D Multi Polygon" error instantly.
+    geo_data <- st_zm(geo_data, drop = TRUE, what = "ZM")
+    
+    # D. Create the destination sub-folder
+    dir.create(dirname(output_path), recursive = TRUE, showWarnings = FALSE)
+    
+    # E. Write to the NEW location
+    st_write(geo_data, output_path, delete_layer = TRUE, quiet = TRUE)
+    
+    cat("Saved.\n")
+    
+  }, error = function(e) {
+    cat("ERROR!\n")
+    message("   Details: ", e$message)
+  })
+}
+
+cat("\nDone! Check the folder:", output_root)
+
+```
+
+
+Zip up the pkey files for GEE upload
+```{r}
+
+# ==============================================================================
+# CONFIGURATION
+# ==============================================================================
+input_root  <- "data/mixed/unzipped_pkey"
+output_root <- "data/mixed/zipped_pkey"
+
+# Create output directory
+dir.create(output_root, recursive = TRUE, showWarnings = FALSE)
+
+# ==============================================================================
+# PROCESSING SCRIPT
+# ==============================================================================
+
+# 1. Find the main .shp files
+#    We focus on .shp, then grab the related neighbors (.dbf, .shx, etc.)
+shp_files <- list.files(input_root, pattern = "\\.shp$", recursive = TRUE, full.names = TRUE)
+
+cat("Found", length(shp_files), "shapefiles. Zipping...\n\n")
+
+for (i in seq_along(shp_files)) {
+  
+  shp_path <- shp_files[i]
+  
+  # Get the base name (e.g., "al_2020")
+  # tools::file_path_sans_ext removes ".shp"
+  base_name <- tools::file_path_sans_ext(basename(shp_path))
+  
+  # Get the directory where this shapefile lives
+  parent_dir <- dirname(shp_path)
+  
+  # 2. Identify all related files (shp, shx, dbf, prj, cpg)
+  #    We look for files in that folder that share the same start name
+  related_files <- list.files(parent_dir, pattern = paste0("^", base_name, "\\."), full.names = TRUE)
+  
+  # 3. Define the output zip path
+  zip_name <- paste0(base_name, ".zip")
+  zip_path <- file.path(output_root, zip_name)
+  
+  cat(sprintf("[%d / %d] Zipping: %s -> %s\n", i, length(shp_files), base_name, zip_name))
+  
+  # 4. Construct the System Command
+  #    -j : "Junk paths" (flattens the zip so GEE sees files immediately)
+  #    shQuote checks for spaces in filenames to avoid errors
+  cmd <- paste(
+    "zip", 
+    "-j", 
+    shQuote(zip_path), 
+    paste(shQuote(related_files), collapse = " ")
+  )
+  
+  # 5. Execute
+  #    ignore.stdout = TRUE keeps the console clean
+  system(cmd, ignore.stdout = TRUE)
+}
+
+cat("\nDone! Your upload-ready zips are in:", output_root)
+
+```
+
+
+
+
+
+
+### 2024 NYT Data
+
+Create new version of NYT 2024 data with primary key:
+
+```{r}
+# 1. Load the Shapefile
+#    Update this path to point to the .shp file inside your high_res folder
+input_path <- "data/precincts/nyt_2024_shapefiles/tiles.shp"
+output_path <- "data/precincts/nyt_2024_shapefiles_primarykey/precincts_id.shp"
+
+# Create output directory if it doesn't exist
+dir.create(dirname(output_path), showWarnings = FALSE)
+
+print("Reading Shapefile... (This might take a minute)")
+geo_data <- st_read(input_path)
+
+# 2. Add the UNIQUEID column
+#    We use a loop to generate a unique UUID for every single row
+print("Generating Unique IDs...")
+
+# This generates vector of IDs like "550e8400-e29b-41d4-a716-446655440000"
+# We force it to be a character string
+geo_data$UUIDPKEY <- unlist(lapply(1:nrow(geo_data), function(x) UUIDgenerate()))
+
+# 3. Verify
+print(head(geo_data$UUIDPKEY))
+
+# 4. Write the NEW Shapefile
+print("Saving new Shapefile...")
+st_write(geo_data, output_path, delete_layer = TRUE)
+
+print("Done! You are ready to zip and upload.")
+```
+
+Just testing that this worked and we're all good to go with the zipping for GEE:
+
+```{r}
+
+# Try to read the NEW file back into R
+test_load <- st_read("data/precincts/nyt_2024_shapefiles_primarykey/precincts_id.shp")
+head(test_load)
+
+# Check if the ID column exists
+print(head(test_load$UUIDPKEY))
+
+# Check if it plots (just plot the first 100 rows to be fast)
+plot(st_geometry(test_load[1:100,]))
+```

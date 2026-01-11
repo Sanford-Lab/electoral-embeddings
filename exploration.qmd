@@ -1,0 +1,1107 @@
+---
+title: "exploration"
+format: html
+---
+
+```{r}
+
+county <- read.csv("data/counties/2020_county_presidential.csv")
+head(county)                          # checking the data loaded correctly
+unique(county$state_name)             # just checking all 50 are present
+unique(county$county_fips)    # checking number of unique counties
+
+county[county$state_name == "Alaska", ]  # checking Alaska dat
+
+a <- read.csv("data/counties/county_embeddings_2020.csv")
+a
+```
+
+```{r}
+
+## This code retrieves the shapefiles!
+
+
+library(xml2)
+library(rvest)
+
+base_url <- "https://www2.census.gov/geo/tiger/TIGER2020PL/LAYER/COUNTY/2020/"
+
+page <- read_html(base_url)
+links <- html_elements(page, "a") |> html_attr("href")
+zip_files <- links[grepl("\\.zip$", links)]
+
+out_dir <- "data/counties/shapefiles"
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+# bump timeout
+options(timeout = max(600, getOption("timeout")))
+
+for (f in zip_files) {
+  file_url  <- paste0(base_url, f)
+  dest_file <- file.path(out_dir, f)
+
+  # skip if already downloaded
+  if (file.exists(dest_file)) {
+    message("Skipping ", f, " (already exists)")
+    next
+  }
+
+  message("Downloading ", f, " ...")
+
+  tryCatch(
+    {
+      download.file(file_url, destfile = dest_file, mode = "wb", quiet = TRUE)
+      message("  ✓ Finished ", f)
+    },
+    error = function(e) {
+      message("  ✗ FAILED ", f, " : ", e$message)
+    }
+  )
+}
+
+```
+
+```{r}
+
+## This code unzips the shapefiles!
+library(sf)
+library(dplyr)
+library(ggplot2)
+
+zip_dir  <- "data/counties/shapefiles"
+unzip_dir <- "data/counties/shapefiles_unzipped"
+
+dir.create(unzip_dir, recursive = TRUE, showWarnings = FALSE)
+
+# all the zip files we downloaded from Census
+zip_files <- list.files(zip_dir, pattern = "\\.zip$", full.names = TRUE)
+
+for (z in zip_files) {
+  message("Unzipping ", basename(z), " ...")
+  # put each state into its own subfolder (based on zip name)
+  exdir_state <- file.path(
+    unzip_dir,
+    tools::file_path_sans_ext(basename(z))
+  )
+  dir.create(exdir_state, showWarnings = FALSE)
+  unzip(z, exdir = exdir_state)
+}
+
+```
+
+```{r}
+
+# This code reads in all the shapefiles we just unzipped!
+# find every county20 shapefile we just unzipped
+shp_files <- list.files(
+  unzip_dir,
+  pattern = "county20\\.shp$",
+  full.names = TRUE,
+  recursive = TRUE
+)
+
+length(shp_files)   # should be ~56
+
+alaska <- st_read("data/counties/shapefiles_unzipped/tl_2020_02_county20/tl_2020_02_county20.shp")
+nrow(alaska)
+
+# read & row-bind into one big sf
+county_shapes <- do.call(
+  rbind,
+  lapply(shp_files, st_read, quiet = TRUE)
+)
+
+```
+```{r}
+
+# ---- 1. Prepare a lightweight shapefile ----
+county_shapes_export <- county_shapes %>%
+  mutate(county_fips = as.character(county_fips)) %>%
+  select(county_fips, STATEFP20, geometry)
+
+# Output folder
+out_dir <- "data/counties"
+shp_name <- "usa_counties"
+
+# ---- 2. Write the shapefile (produces .shp, .dbf, .shx, .prj, .cpg) ----
+st_write(
+  county_shapes_export,
+  dsn = file.path(out_dir, paste0(shp_name, ".shp")),
+  delete_dsn = TRUE
+)
+
+# ---- 3. Zip all shapefile components together ----
+# list all files with that prefix (e.g., usa_counties.*)
+shp_files <- list.files(
+  path = out_dir,
+  pattern = paste0("^", shp_name, "\\.(shp|dbf|shx|prj|cpg)$"),
+  full.names = TRUE
+)
+
+# Zip them into usa_counties.zip
+zipfile_path <- file.path(out_dir, paste0(shp_name, ".zip"))
+zip::zipr(zipfile_path, files = shp_files)
+
+
+
+```
+
+
+```{r}
+library(dplyr)
+
+# Alaska in the election data
+county_ak <- county %>%
+  filter(substr(county_fips, 1, 2) == "02") %>%
+  count(county_fips, sort = TRUE)
+
+nrow(county_ak)
+
+# Alaska in the shapefile
+shapes_ak <- county_shapes %>%
+  filter(STATEFP20 == "02") %>%
+  count(county_fips, sort = TRUE)
+
+nrow(shapes_ak)
+
+```
+
+
+```{r}
+
+library(stringr)
+
+county <- county %>%
+  mutate(
+    county_fips = as.character(county_fips),
+    # if some IDs are longer than 5 (e.g. county-splits), keep only the first 5
+    county_fips = str_sub(county_fips, 1, 5),
+    # then left-pad to 5 digits (in case anything came in shorter)
+    county_fips = str_pad(county_fips, width = 5, side = "left", pad = "0")
+  )
+
+
+# shapefile: create same 5-digit FIPS from STATEFP20 + COUNTYFP20
+county_shapes <- county_shapes %>%
+  mutate(
+    county_fips = paste0(STATEFP20, COUNTYFP20)
+  )
+
+# now attach ONLY the geometry column to the county data
+county_sf <- county %>%
+  left_join(
+    county_shapes %>% select(STATEFP20, county_fips, geometry),
+    by = "county_fips"
+  ) %>%
+  st_as_sf()
+
+unique(substr(county$county_fips, 1, 2))            # should include "02"
+unique(county_sf$STATEFP20)                         # should now also include "02"
+
+```
+
+
+```{r}
+# ---- Packages ----
+library(sf)
+library(dplyr)
+library(leaflet)
+library(scales)
+
+# county_sf: your joined sf object with per_dem in [0,1]
+
+# ---- 1. Clean geometry and transform to WGS84 ----
+county_poly <- county_sf %>%
+  st_make_valid() %>%                       # fix invalid geometries if any
+  st_cast("MULTIPOLYGON", warn = FALSE) %>% # ensure polygonal geometry
+  st_transform(4326)                        # Leaflet wants EPSG:4326 (lat/long)
+
+# ---- 2. Clamp per_dem so 15%/85% are full red/blue ----
+county_poly <- county_poly %>%
+  mutate(
+    per_dem_clamped = pmin(pmax(per_dem, 0.15), 0.85)
+  )
+
+# ---- 3. Build a robust palette domain ----
+vals <- county_poly$per_dem_clamped
+vals_finite <- vals[is.finite(vals) & !is.na(vals)]
+
+pal <- colorNumeric(
+  palette  = c("red", "white", "blue"),
+  domain   = range(vals_finite, na.rm = TRUE),
+  na.color = "transparent"
+)
+
+# ---- 4. Interactive Leaflet map (no labels yet) ----
+leaflet(county_poly, options = leafletOptions(minZoom = 3)) %>%
+  addTiles() %>%  # OpenStreetMap basemap
+  addPolygons(
+    fillColor   = ~pal(per_dem_clamped),
+    fillOpacity = 0.8,
+    color       = "#555555",   # county borders
+    weight      = 0.1,
+    opacity     = 0.3,
+    smoothFactor = 0.1,
+    highlightOptions = highlightOptions(
+      weight = 1,
+      color = "black",
+      fillOpacity = 0.9,
+      bringToFront = TRUE
+    )
+  ) %>%
+  addLegend(
+    position = "bottomright",
+    pal      = pal,
+    values   = vals_finite,
+    title    = "Democratic share",
+    opacity  = 0.8
+  )
+
+```
+
+
+```{r}
+
+ggplot(county_sf) +
+  geom_sf(aes(fill = per_dem), color = NA) +
+  scale_fill_gradient2(
+    low = "red",       # Republican counties
+    mid = "white",     # Even split (≈50%)
+    high = "blue",     # Democratic counties
+    midpoint = 0.5,    # Center the scale at 50% Dem share
+    limits = c(0.15, 0.85),
+    oob = scales::squish, 
+    na.value = "grey80",
+    name = "Democratic share"
+  ) +
+  theme_void() +
+  labs(
+    title = "US Counties – 2020 Presidential Vote Share",
+    subtitle = "Blue = more Democratic, Red = more Republican"
+  )
+
+
+
+
+```
+
+
+
+```{r}
+
+
+library(sf)        # for shapefiles
+library(dplyr)     # for joins / mutate
+library(ggplot2)   # for plotting
+
+shp_path <- "data/tl_2020_01_county20/tl_2020_01_county20.shp"
+
+shp <- st_read(shp_path)
+
+# county: make sure county_fips is a zero-padded 5-character string
+county <- county %>%
+  mutate(county_fips = sprintf("%05d", county_fips))
+
+# shapefile: build 5-digit county_fips from STATEFP + COUNTYFP
+# (if you already have a 5-digit GEOID, you can reuse that instead)
+shp <- shp %>%
+  mutate(county_fips = paste0(STATEFP20, COUNTYFP20))
+
+county_sf <- county %>%
+  left_join(
+    shp %>% select(county_fips, geometry),
+    by = "county_fips"
+  ) %>%
+  st_as_sf()   # make sure the result remains an sf object
+
+ggplot(county_sf) +
+  geom_sf(aes(fill = per_dem), color = NA) +
+  scale_fill_viridis_c(option = "plasma", na.value = "grey80") +
+  theme_void() +
+  labs(fill = "Dem share",
+       title = "Test map: election data joined to county shapefile")
+
+
+```
+
+```{r}
+
+nyt <- st_read("data/precincts/nyt_2024_shapefiles_primarykey/precincts_id.shp")
+head(nyt)
+nrow(nyt)
+
+ak <- st_read("data/mixed/unzipped_pkey/ak/ak_2020.shp")
+
+```
+
+
+
+
+
+
+
+
+
+```{r}
+
+# load libraries
+library(dplyr)
+library(readr)
+library(ranger)
+library(tidymodels)
+library(yardstick)
+library(xgboost)
+library(tidyverse)
+library(sf)
+library(uuid)
+
+```
+
+Process the original mean precinct data
+```{r}
+
+mixed <- read.csv("data/mixed/mixed_embeddings_2020.csv")
+
+mixed <- mixed %>%
+  mutate(TRUMPSHARE = G20PRERTRU / TOTALVOTES) %>%
+  select(state, TOTALVOTES, TRUMPSHARE, G20PREDBID, G20PRERTRU, system.index, starts_with("A"))
+
+write_csv(mixed, "data/mixed/processed_mixed_embeddings_2020.csv")
+
+```
+
+Process mean precinct data 2020 with primary key
+```{r}
+
+mixed_pkey <- read.csv("data/mixed/precinct_embeddings_2020_pkey.csv")
+
+mixed_pkey <- mixed_pkey[mixed_pkey$TOTALVOTES >= 5, ]   # filter out tiny precincts
+
+mixed_pkey <- mixed_pkey %>%
+  mutate(TRUMPSHARE = G20PRERTRU / TOTALVOTES) %>%
+  mutate(BIDENSHARE = G20PREDBID / TOTALVOTES) %>%
+  select(UUIDPKEY, state, TOTALVOTES, TRUMPSHARE, BIDENSHARE, G20PREDBID, G20PRERTRU, system.index, starts_with("A"))
+
+write_csv(mixed_pkey, "data/mixed/2020_precinct_embeddings_uuid.csv")
+
+```
+
+
+PROCESS 2024 NYT EMBEDDINGS
+```{r}
+
+df <- read.csv("data/precincts/nyt_2024_embeddings.csv")
+head(df)
+nrow(df)
+
+sum(df$votes_tota)    # number of votes is 153,850,356 -- looks right!
+
+nrow(df[df$votes_tota == 0, ])    # 0 precincts with no votes
+nrow(df[df$votes_tota < 10, ])    # 1577 precincts with fewer than ten voters
+
+sum(df[df$votes_tota < 10, ]$votes_tota) # 6324 votes in precincts with fewer than 10 total votes
+
+df1 <- df %>%
+  mutate(REPUBSHARE = votes_rep / votes_tota) %>%
+  mutate(DEMOCSHARE = votes_dem / votes_tota) %>%
+  mutate(TOTALVOTES = votes_tota) %>%
+  mutate(REPUBVOTES = votes_rep) %>%
+  mutate(DEMOCVOTES = votes_dem) %>%
+  select(UUIDPKEY, state, TOTALVOTES, REPUBSHARE, DEMOCSHARE, DEMOCVOTES, REPUBVOTES, system.index, starts_with("A"))
+
+df1 <- df1[df1$TOTALVOTES >= 10, ]   # filter out tiny precincts
+
+write_csv(df1, "data/precincts/processed_2024_embeddings.csv")
+
+```
+
+
+Process the stdev precinct data 2020
+```{r}
+mixed_sd <- read.csv("data/precincts/precinct_embeddings_2020_mean_std_skew.csv")
+head(mixed_sd)
+
+mixed_sd <- mixed_sd %>%
+  mutate(TRUMPSHARE = G20PRERTRU / TOTALVOTES) %>%
+  select(state, TOTALVOTES, TRUMPSHARE, G20PREDBID, G20PRERTRU, system.index, starts_with("A"))
+
+write_csv(mixed_sd, "data/mixed/sd_processed_mixed_embeddings_2020_sd.csv")
+```
+
+
+READ IN PRECINCT DATA!
+```{r}
+
+df <- read.csv("data/mixed/processed_mixed_embeddings_2020.csv")
+dfsd <- read.csv("data/mixed/sd_processed_mixed_embeddings_2020_sd.csv")
+
+```
+
+Filter out tiny precincts!
+```{r}
+
+head(df[,c("TOTALVOTES","TRUMPSHARE","G20PREDBID","G20PRERTRU")])
+
+sum(df$TOTALVOTES)    # number of votes is 158,425,815 -- looks right!
+
+nrow(df[df$TOTALVOTES == 0, ])    # 6,296 precincts with no votes
+sum(df[df$TOTALVOTES < 5, ]$TOTALVOTES)   # only 3,510 votes total from precincts with fewer than 5 votes
+
+df2 <- df[df$TOTALVOTES >= 5, ]   # filter out tiny precincts
+dfsd2 <- dfsd[dfsd$TOTALVOTES >= 5, ]   # filter out tiny precincts for the sd set
+
+```
+
+
+LINEAR REGRESSION
+```{r}
+
+formula <- as.formula(
+  paste("TRUMPSHARE ~", paste(paste0("A", sprintf("%02d", 1:63)), collapse = " + "))
+)
+
+model <- lm(formula, data = df2)
+summary(model)
+
+```
+
+Random Forest with default 500 trees and minimum node size of 5
+```{r}
+# ==========================================
+# Random forest with ranger on embeddings
+# ==========================================
+
+set.seed(10)  # for reproducibility
+
+# Keep only the columns we need and drop NAs
+#    (assumes A00:A63 exist and are the 64 embedding dims)
+data_rf <- df2 %>%
+  select(TRUMPSHARE, A00:A63) %>%
+  na.omit()
+
+# Train/test split (80/20)
+n <- nrow(data_rf)
+train_idx <- sample(seq_len(n), size = floor(0.8 * n))
+
+train_df <- data_rf[train_idx, ]
+test_df  <- data_rf[-train_idx, ]
+
+cat("Train rows:", nrow(train_df), " | Test rows:", nrow(test_df), "\n")
+
+# Fit ranger random forest
+rf_model <- ranger(
+  TRUMPSHARE ~ .,
+  data       = train_df,
+  num.trees  = 500,
+  mtry       = 8,
+  importance = "impurity",   # or "permutation" if you want stricter importance
+  seed       = 42
+)
+
+# Print a brief model summary (includes OOB R²)
+print(rf_model)
+
+# Predict on the test set
+rf_pred <- predict(rf_model, data = test_df)$predictions
+
+# Evaluate performance on the test set
+rss  <- sum((rf_pred - test_df$TRUMPSHARE)^2)
+tss  <- sum((test_df$TRUMPSHARE - mean(test_df$TRUMPSHARE))^2)
+r2   <- 1 - rss / tss
+rmse <- sqrt(mean((rf_pred - test_df$TRUMPSHARE)^2))
+
+cat("\nPerformance on test set:\n")
+cat("R²   =", round(r2, 3), "\n")
+cat("RMSE =", round(rmse, 4), "\n\n")
+
+# Variable importance summary
+imp <- sort(rf_model$variable.importance, decreasing = TRUE)
+
+cat("Top 10 most important features:\n")
+print(round(imp[1:10], 4))
+
+```
+Test set performance (set seed 42): 
+R squared: 0.736
+RMSE: 0.1203
+
+Test set performance (set seed 43): 
+R squared: 0.733
+RMSE: 0.121
+
+Test set performance (set seed 10): 
+R squared: 0.734
+RMSE: 0.1206
+
+
+Random forest on larger dataset with mean, stdDev, and skew features
+```{r}
+
+# =========================================================================
+# Random forest on Extended Embeddings (Mean, StdDev, Skew)
+# =========================================================================
+
+set.seed(42)  # for reproducibility
+
+# 1. Prepare Data
+# -------------------------------------------------------------------------
+# Select TRUMPSHARE and all columns that end in mean, stdDev, or skew.
+# This avoids hardcoding ranges like A00:A63
+data_rf <- dfsd2 %>%
+  select(TRUMPSHARE, matches("mean|stdDev|skew")) %>%
+  na.omit()
+
+# Check dimensions to ensure we have approx 192 predictors + 1 outcome
+cat("Data dimensions:", dim(data_rf)[1], "rows and", dim(data_rf)[2], "columns\n")
+
+# 2. Train/Test Split (80/20)
+# -------------------------------------------------------------------------
+n <- nrow(data_rf)
+train_idx <- sample(seq_len(n), size = floor(0.8 * n))
+
+train_df <- data_rf[train_idx, ]
+test_df  <- data_rf[-train_idx, ]
+
+cat("Train rows:", nrow(train_df), " | Test rows:", nrow(test_df), "\n")
+
+# 3. Fit Ranger Random Forest
+# -------------------------------------------------------------------------
+# We calculate a dynamic mtry. Standard for regression is p/3.
+# With ~192 vars, mtry should be around 64.
+num_features <- ncol(train_df) - 1
+optimal_mtry <- floor(num_features / 3)
+
+rf_model <- ranger(
+  TRUMPSHARE ~ .,
+  data       = train_df,
+  num.trees  = 500,
+  mtry       = optimal_mtry, 
+  importance = "impurity",
+  seed       = 42,
+  num.threads = parallel::detectCores() - 1 # Use all cores but one for speed
+)
+
+# Print model summary
+print(rf_model)
+
+# 4. Evaluate Performance
+# -------------------------------------------------------------------------
+rf_pred <- predict(rf_model, data = test_df)$predictions
+
+rss  <- sum((rf_pred - test_df$TRUMPSHARE)^2)
+tss  <- sum((test_df$TRUMPSHARE - mean(test_df$TRUMPSHARE))^2)
+r2   <- 1 - rss / tss
+rmse <- sqrt(mean((rf_pred - test_df$TRUMPSHARE)^2))
+
+cat("\n==============================\n")
+cat("Performance on test set:\n")
+cat("==============================\n")
+cat("R²   =", round(r2, 3), "\n")
+cat("RMSE =", round(rmse, 4), "\n")
+
+# 5. Variable Importance
+# -------------------------------------------------------------------------
+imp <- sort(rf_model$variable.importance, decreasing = TRUE)
+
+cat("\nTop 15 most important features:\n")
+print(round(imp[1:15], 4))
+
+# Optional: Check if StdDev or Skew provide value compared to Mean
+# This calculates the % of the total importance held by each type of stat
+mean_imp <- sum(imp[grep("mean", names(imp))])
+std_imp  <- sum(imp[grep("stdDev", names(imp))])
+skew_imp <- sum(imp[grep("skew", names(imp))])
+total_imp <- sum(imp)
+
+cat("\nImportance contribution by statistic type:\n")
+cat("Mean:   ", round((mean_imp/total_imp)*100, 1), "%\n")
+cat("StdDev: ", round((std_imp/total_imp)*100, 1), "%\n")
+cat("Skew:   ", round((skew_imp/total_imp)*100, 1), "%\n")
+```
+
+
+Random Forest with 1000 trees and minimum node size of 3
+```{r}
+
+set.seed(42)  # for reproducibility
+
+# Keep only the columns we need and drop NAs
+#    (assumes A00:A63 exist and are the 64 embedding dims)
+data_rf <- df2 %>%
+  select(TRUMPSHARE, A00:A63) %>%
+  na.omit()
+
+# Train/test split (80/20)
+n <- nrow(data_rf)
+train_idx <- sample(seq_len(n), size = floor(0.8 * n))
+
+train_df <- data_rf[train_idx, ]
+test_df  <- data_rf[-train_idx, ]
+
+cat("Train rows:", nrow(train_df), " | Test rows:", nrow(test_df), "\n")
+
+# Fit ranger random forest
+rf_model <- ranger(
+  TRUMPSHARE ~ .,
+  data       = train_df,
+  num.trees  = 1000,
+  mtry       = 8,
+  min.node.size = 3,
+  importance = "impurity",   # or "permutation" if you want stricter importance
+  seed       = 42
+)
+
+# Print a brief model summary (includes OOB R²)
+print(rf_model)
+
+# Predict on the test set
+rf_pred <- predict(rf_model, data = test_df)$predictions
+
+# Evaluate performance on the test set
+rss  <- sum((rf_pred - test_df$TRUMPSHARE)^2)
+tss  <- sum((test_df$TRUMPSHARE - mean(test_df$TRUMPSHARE))^2)
+r2   <- 1 - rss / tss
+rmse <- sqrt(mean((rf_pred - test_df$TRUMPSHARE)^2))
+
+cat("\nPerformance on test set:\n")
+cat("R²   =", round(r2, 3), "\n")
+cat("RMSE =", round(rmse, 4), "\n\n")
+
+# Variable importance summary
+imp <- sort(rf_model$variable.importance, decreasing = TRUE)
+
+cat("Top 10 most important features:\n")
+print(round(imp[1:10], 4))
+
+```
+Test set performance: 
+R squared: 0.737
+RMSE: 0.1201
+
+
+First pass XGBoost model -- doesn't perform as well
+```{r}
+# ==========================================
+# XGBoost on embeddings for TRUMPSHARE
+# ==========================================
+
+set.seed(42)  # reproducibility
+
+# 1️⃣ Ensure embeddings are numeric and select columns
+df2_clean <- df2 %>%
+  mutate(across(starts_with("A"), ~ as.numeric(.x)))
+
+data_xgb <- df2_clean %>%
+  select(TRUMPSHARE, A00:A63) %>%  # adjust if your cols differ
+  na.omit()
+
+cat("Rows after na.omit:", nrow(data_xgb), "\n")
+
+# 2️⃣ Train/test split (80/20)
+n <- nrow(data_xgb)
+train_idx <- sample(seq_len(n), size = floor(0.8 * n))
+
+train_df <- data_xgb[train_idx, ]
+test_df  <- data_xgb[-train_idx, ]
+
+y_train <- train_df$TRUMPSHARE
+y_test  <- test_df$TRUMPSHARE
+
+X_train <- as.matrix(train_df[, -1])  # drop target column
+X_test  <- as.matrix(test_df[, -1])
+
+# 3️⃣ Create DMatrix objects (xgboost's optimized data structure)
+dtrain <- xgb.DMatrix(data = X_train, label = y_train)
+dtest  <- xgb.DMatrix(data = X_test,  label = y_test)
+
+watchlist <- list(train = dtrain, eval = dtest)
+
+# 4️⃣ Set XGBoost parameters
+params <- list(
+  booster          = "gbtree",
+  objective        = "reg:squarederror",  # regression with squared error loss
+  eta              = 0.05,                # learning rate (shrinkage)
+  max_depth        = 6,                   # depth of each tree
+  subsample        = 0.8,                 # row subsampling
+  colsample_bytree = 0.8,                 # feature subsampling
+  min_child_weight = 1,                   # min sum of instance weight in a leaf
+  lambda           = 1.0,                 # L2 regularization
+  alpha            = 0.0,                 # L1 regularization
+  eval_metric      = "rmse"               # track RMSE on eval set
+)
+
+# 5️⃣ Train the model with early stopping
+set.seed(42)
+xgb_model <- xgb.train(
+  params                = params,
+  data                  = dtrain,
+  nrounds               = 500,     # max number of boosting rounds
+  watchlist             = watchlist,
+  early_stopping_rounds = 50,      # stop if no improvement for 50 rounds
+  print_every_n         = 25       # how often to print progress
+)
+
+cat("\nBest iteration:", xgb_model$best_iteration, "\n")
+
+# 6️⃣ Predict on the test set
+xgb_pred <- predict(xgb_model, newdata = X_test)
+
+# 7️⃣ Evaluate performance
+rss  <- sum((xgb_pred - y_test)^2)
+tss  <- sum((y_test - mean(y_test))^2)
+r2   <- 1 - rss / tss
+rmse <- sqrt(mean((xgb_pred - y_test)^2))
+
+cat("\nXGBoost performance on test set:\n")
+cat("R²   =", round(r2, 3), "\n")
+cat("RMSE =", round(rmse, 4), "\n\n")
+
+# 8️⃣ Variable importance
+imp <- xgb.importance(
+  feature_names = colnames(X_train),
+  model         = xgb_model
+)
+
+cat("Top 10 most important features:\n")
+print(imp[1:10, ])
+
+```
+Test set performance: 
+R squared: 0.705
+RMSE: 0.1271
+
+
+Using tidymodels to optimize the parameter tuning -- reduce training sample to increase speed, tree depth, etc.
+```{r}
+
+set.seed(42)
+
+# library(doParallel)  # optional if you want parallelization
+
+# ==========================================================
+# 1. Clean data: ensure embeddings are numeric & select cols
+# ==========================================================
+
+df2_clean <- df2 %>%
+  mutate(across(starts_with("A"), ~ as.numeric(.x)))
+
+data_xgb <- df2_clean %>%
+  select(TRUMPSHARE, A00:A63) %>%
+  na.omit()
+
+cat("Rows after na.omit:", nrow(data_xgb), "\n")
+
+# ==========================================================
+# 2. Train/test split (80/20)
+# ==========================================================
+
+data_split <- initial_split(data_xgb, prop = 0.8, strata = TRUMPSHARE)
+train_df   <- training(data_split)
+test_df    <- testing(data_split)
+
+# ==========================================================
+# 3. Smaller tuning sample from training set
+#    (Fit final model later on full train_df)
+# ==========================================================
+
+max_tune_n <- 50000L  # adjust up/down depending on patience
+tune_df <- if (nrow(train_df) > max_tune_n) {
+  train_df %>% slice_sample(n = max_tune_n)
+} else {
+  train_df
+}
+
+cat("Rows used for tuning:", nrow(tune_df), "\n")
+
+# ==========================================================
+# 4. Resampling: 3-fold CV on the tuning subset
+# ==========================================================
+
+set.seed(42)
+folds <- vfold_cv(tune_df, v = 3, strata = TRUMPSHARE)
+
+# ==========================================================
+# 5. Recipes (one for tuning, one for final fit)
+# ==========================================================
+
+xgb_recipe_tune  <- recipe(TRUMPSHARE ~ ., data = tune_df)
+xgb_recipe_full  <- recipe(TRUMPSHARE ~ ., data = train_df)
+
+# ==========================================================
+# 6. Model spec: XGBoost with tunable hyperparameters
+#    (slightly narrower ranges for speed)
+# ==========================================================
+
+xgb_spec <- boost_tree(
+  trees         = tune(),     # nrounds
+  tree_depth    = tune(),     # max_depth
+  learn_rate    = tune(),     # eta
+  loss_reduction = tune(),    # gamma
+  min_n         = tune(),     # min child size
+  mtry          = tune(),     # colsample_bytree-ish
+  sample_size   = 0.8         # fixed subsample
+) %>%
+  set_engine("xgboost") %>%
+  set_mode("regression")
+
+# Workflows for tuning & final fit
+xgb_wf_tune <- workflow() %>%
+  add_model(xgb_spec) %>%
+  add_recipe(xgb_recipe_tune)
+
+xgb_wf_full <- workflow() %>%
+  add_model(xgb_spec) %>%
+  add_recipe(xgb_recipe_full)
+
+# ==========================================================
+# 7. Define tuning parameter ranges (tighter + smaller grid)
+# ==========================================================
+
+predictor_df <- tune_df %>% select(-TRUMPSHARE)
+
+xgb_params <- parameters(
+  finalize(mtry(), predictor_df),            # 1..p
+  trees(range = c(300L, 800L)),              # fewer trees than before
+  tree_depth(range = c(3L, 6L)),             # shallower trees
+  learn_rate(range = c(0.05, 0.2)),          # reasonable learning rate
+  loss_reduction(),                          # default gamma range
+  min_n(range = c(5L, 40L))                  # min child size
+)
+
+set.seed(42)
+xgb_grid <- grid_space_filling(
+  xgb_params,
+  size = 10                                   # 10 configs instead of 25
+)
+
+# ==========================================================
+# 8. Tune: CV performance for each grid point
+# ==========================================================
+
+metrics_to_use <- metric_set(yardstick::rmse, yardstick::rsq)
+
+# Optional parallelization (uncomment if you want it and have doParallel)
+# cl <- parallel::makeCluster(parallel::detectCores() - 1)
+# doParallel::registerDoParallel(cl)
+
+set.seed(42)
+xgb_tune_res <- tune_grid(
+  xgb_wf_tune,
+  resamples = folds,
+  grid = xgb_grid,
+  metrics = metrics_to_use,
+  control = control_grid(
+    save_pred = FALSE,
+    verbose = TRUE
+  )
+)
+
+# If you used parallel:
+# parallel::stopCluster(cl)
+
+show_best(xgb_tune_res, metric = "rmse", n = 5)
+
+# ==========================================================
+# 9. Select best hyperparameters and finalize workflow
+# ==========================================================
+
+best_xgb <- select_best(xgb_tune_res, metric = "rmse")
+best_xgb
+
+final_xgb_wf <- finalize_workflow(xgb_wf_full, best_xgb)
+
+# ==========================================================
+# 🔟 Fit final model on full training data, evaluate on test
+# ==========================================================
+
+final_xgb_fit <- last_fit(final_xgb_wf, split = data_split)
+
+# Performance on held-out test set
+collect_metrics(final_xgb_fit)
+
+# Predictions if you want them
+xgb_test_preds <- collect_predictions(final_xgb_fit)
+head(xgb_test_preds)
+
+# Inspect the fitted xgboost model
+final_xgb_model <- extract_fit_parsnip(final_xgb_fit$.workflow[[1]])
+final_xgb_model
+
+collect_metrics(final_xgb_fit)
+
+```
+
+Significantly worse performance:
+RMSE: 0.15
+R squared: 0.592
+
+Second attempt using tidymodels -- more juice
+```{r}
+
+library(tidymodels)
+# library(doParallel)  # optional if you want parallel
+
+set.seed(42)
+
+# ==========================================================
+# 1. Clean data: embeddings numeric & select cols
+# ==========================================================
+
+df2_clean <- df2 %>%
+  mutate(across(starts_with("A"), ~ as.numeric(.x)))
+
+data_xgb <- df2_clean %>%
+  select(TRUMPSHARE, A00:A63) %>%
+  na.omit()
+
+cat("Rows after na.omit:", nrow(data_xgb), "\n")
+
+# ==========================================================
+# 2. Train/test split (80/20)
+# ==========================================================
+
+data_split <- initial_split(data_xgb, prop = 0.8, strata = TRUMPSHARE)
+train_df   <- training(data_split)
+test_df    <- testing(data_split)
+
+# ==========================================================
+# 3. Tuning subset from training set
+#    (XGBoost tuned on subset, final model on full train_df)
+# ==========================================================
+
+max_tune_n <- 120000L   # increase if you want, lower if too slow
+
+tune_df <- if (nrow(train_df) > max_tune_n) {
+  train_df %>% slice_sample(n = max_tune_n)
+} else {
+  train_df
+}
+
+cat("Rows used for tuning:", nrow(tune_df), "\n")
+
+# ==========================================================
+# 4. Resampling: 3-fold CV on tuning subset
+# ==========================================================
+
+set.seed(42)
+folds <- vfold_cv(tune_df, v = 3, strata = TRUMPSHARE)
+
+# ==========================================================
+# 5. Recipes (tuning + final)
+# ==========================================================
+
+xgb_recipe_tune <- recipe(TRUMPSHARE ~ ., data = tune_df)
+xgb_recipe_full <- recipe(TRUMPSHARE ~ ., data = train_df)
+
+# ==========================================================
+# 6. XGBoost model spec with more expressive trees
+# ==========================================================
+
+xgb_spec <- boost_tree(
+  trees          = tune(),  # nrounds
+  tree_depth     = tune(),  # max_depth
+  learn_rate     = tune(),  # eta
+  loss_reduction = tune(),  # gamma
+  min_n          = tune(),  # min_child_weight-ish
+  mtry           = tune(),  # colsample_bytree-ish
+  sample_size    = 0.8      # subsample
+) %>%
+  set_engine("xgboost") %>%
+  set_mode("regression")
+
+xgb_wf_tune <- workflow() %>%
+  add_model(xgb_spec) %>%
+  add_recipe(xgb_recipe_tune)
+
+xgb_wf_full <- workflow() %>%
+  add_model(xgb_spec) %>%
+  add_recipe(xgb_recipe_full)
+
+# ==========================================================
+# 7. Parameter ranges (deeper trees + more trees)
+# ==========================================================
+
+predictor_df <- tune_df %>% select(-TRUMPSHARE)
+
+xgb_params <- parameters(
+  finalize(mtry(), predictor_df),             # 1..p
+  trees(range = c(800L, 2000L)),              # more trees
+  tree_depth(range = c(4L, 12L)),             # deeper trees
+  learn_rate(range = c(0.03, 0.15)),          # conservative learning rate
+  loss_reduction(),                           # gamma (default range)
+  min_n(range = c(5L, 50L))                   # min child size
+)
+
+set.seed(42)
+xgb_grid <- grid_space_filling(
+  xgb_params,
+  size = 15                                   # can bump to 20 if you want
+)
+
+# ==========================================================
+# 8. Tune with CV
+# ==========================================================
+
+metrics_to_use <- metric_set(yardstick::rmse, yardstick::rsq)
+
+# Optional parallelization
+# cl <- parallel::makeCluster(parallel::detectCores() - 1)
+# doParallel::registerDoParallel(cl)
+
+set.seed(42)
+xgb_tune_res <- tune_grid(
+  xgb_wf_tune,
+  resamples = folds,
+  grid = xgb_grid,
+  metrics = metrics_to_use,
+  control = control_grid(
+    save_pred = FALSE,
+    verbose = TRUE
+  )
+)
+
+# if using parallel:
+# parallel::stopCluster(cl)
+
+cat("Best configs (by RMSE):\n")
+show_best(xgb_tune_res, metric = "rmse", n = 5)
+
+# ==========================================================
+# 9. Select best hyperparameters & finalize workflow
+# ==========================================================
+
+best_xgb <- select_best(xgb_tune_res, metric = "rmse")
+best_xgb
+
+final_xgb_wf <- finalize_workflow(xgb_wf_full, best_xgb)
+
+# ==========================================================
+# 🔟 Fit final model on full training data, eval on test
+# ==========================================================
+
+final_xgb_fit <- last_fit(final_xgb_wf, split = data_split)
+
+# Test-set performance (RMSE + R^2)
+final_metrics <- collect_metrics(final_xgb_fit)
+final_metrics
+
+cat("\nTest-set R^2:\n")
+final_metrics %>%
+  filter(.metric == "rsq") %>%
+  print()
+
+# ==========================================================
+# 11. Predictions & fitted model object (optional)
+# ==========================================================
+
+xgb_test_preds <- collect_predictions(final_xgb_fit)
+head(xgb_test_preds)
+
+final_xgb_model <- extract_fit_parsnip(final_xgb_fit$.workflow[[1]])
+final_xgb_model
+
+
+```
+
+
+
