@@ -4,6 +4,52 @@ editor_options:
     wrap: 72
 ---
 
+# Method
+
+## Data acquisition
+
+**2020 precinct-level results** are obtained from Harvard Dataverse
+([link](https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi:10.7910/DVN/K7760H)).
+For some reason I was unable to multi-select and download, so I clicked
+through every state.
+
+-   *Note:* For states KY and NJ, I used `ky_2020.zip` and `nj_2020.zip`
+    (which include a mix of county and precinct-level data) instead of
+    the `vtd_estimates` for precinct results.
+
+For this step, there should now be 51 zip files — I manually stored them
+in a folder called 'og_zipped'. Path should be: `data/mixed/og_zipped`.
+
+Then run the script `2020_precincts_prep.R` to unzip, append with uuid
+primary keys, then re-zipped for GEE use.
+
+``` r
+source("2020_precincts_prep.R")
+```
+
+**NYT data for 2024** is obtained from the detailed election map
+released by NYT ([download
+link](https://int.nyt.com/newsgraphics/elections/map-data/2024/national/precincts-with-results.topojson.gz)).
+Rename it `precincts-with-results.topojson`. Then in terminal, we
+convert it to shapefile using `ogr2ogr`.
+
+IN TERMINAL: first run `brew install gdal` to install `gdal` if not
+already installed. Then run (first replace the paths with the correct
+paths):
+
+`ogr2ogr -f "ESRI Shapefile" .../electoral-embeddings/data/precincts/nyt_2024_shapefiles ...inputpath/precincts-with-results.topojson -s_srs EPSG:4326 -t_srs EPSG:4326 -lco ENCODING=UTF-8`
+
+Finally, once the folder is created, multi-select the 5 newly created
+files, right click, and compress. This creates a file called
+`Archive.zip`. Run the chunk in `primary_key_generation.qmd` to add
+primary keys, then re-compress for GEE use.
+
+## Data cleaning
+
+add primary key
+
+google earth engine step
+
 # Satellite Embeddings Vote Share Prediction
 
 This project analyzes how well Google's satellite embeddings predict

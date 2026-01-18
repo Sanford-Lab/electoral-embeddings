@@ -1,27 +1,12 @@
----
-title: "Primary Key Work"
-author: "Chris Sylvester"
-format: html
-editor: visual
----
-
-## Quarto
-
-This is the code I used to create the primary keys for the 2020 and 2024 NYT data. I need primary keys in the shapefiles before I upload them to Google Earth Engine, because the geometry is dropped once the embeddings get downloaded in CSV format. I use the CSVs for modeling and predictions, and the primary key is necessary to join back the geometries for visualizing the results later on.
-
-Libraries:
-
-```{r}
 library(sf)
 library(uuid)
 library(dplyr)
-```
 
-### 2020 State Data
 
-Create new version of 2020 state/precinct data with primary key:
+# ==============================================================================
+## UNZIP THE DATA ## 
+# ==============================================================================
 
-```{r}
 # 1. Define your paths
 parent_path <- "data/mixed/" 
 
@@ -55,20 +40,14 @@ invisible(lapply(zip_files, function(f) {
   unzip(zipfile = f, exdir = sub_dir)
 }))
 
-message("Done! Files are now organized in: ", output_dir)
-```
 
-```{r}
 
 # ==============================================================================
-# CONFIGURATION
+## GENERATE PRIMARY KEYS ##
 # ==============================================================================
+
 input_root  <- "data/mixed/og_unzipped"
 output_root <- "data/mixed/unzipped_pkeys"
-
-# ==============================================================================
-# PROCESSING SCRIPT
-# ==============================================================================
 
 rel_files <- list.files(
   path = input_root, 
@@ -117,24 +96,15 @@ for (i in seq_along(rel_files)) {
   })
 }
 
-```
-
-Zip up the pkey files for GEE upload
-
-```{r}
-
 # ==============================================================================
-# CONFIGURATION
+## REZIP THE FILES FOR UPLOAD TO GEE ## 
 # ==============================================================================
+
 input_root  <- "data/mixed/unzipped_pkeys"
 output_root <- "data/mixed/zipped_pkeys"
 
 # Create output directory
 dir.create(output_root, recursive = TRUE, showWarnings = FALSE)
-
-# ==============================================================================
-# PROCESSING SCRIPT
-# ==============================================================================
 
 # 1. Find the main .shp files
 #    We focus on .shp, then grab the related neighbors (.dbf, .shx, etc.)
@@ -178,55 +148,5 @@ for (i in seq_along(shp_files)) {
   system(cmd, ignore.stdout = TRUE)
 }
 
-cat("\nDone! Your upload-ready zips are in:", output_root)
 
-```
 
-### 2024 NYT Data
-
-Create new version of NYT 2024 data with primary key:
-
-```{r}
-# 1. Load the Shapefile
-#    Update this path to point to the .shp file inside your high_res folder
-input_path <- "data/precincts/nyt_2024_shapefiles/tiles.shp"
-output_path <- "data/precincts/nyt_2024_shapefiles_primarykey/precincts_id.shp"
-
-# Create output directory if it doesn't exist
-dir.create(dirname(output_path), showWarnings = FALSE)
-
-print("Reading Shapefile... (This might take a minute)")
-geo_data <- st_read(input_path)
-
-# 2. Add the UNIQUEID column
-#    We use a loop to generate a unique UUID for every single row
-print("Generating Unique IDs...")
-
-# This generates vector of IDs like "550e8400-e29b-41d4-a716-446655440000"
-# We force it to be a character string
-geo_data$UUIDPKEY <- unlist(lapply(1:nrow(geo_data), function(x) UUIDgenerate()))
-
-# 3. Verify
-print(head(geo_data$UUIDPKEY))
-
-# 4. Write the NEW Shapefile
-print("Saving new Shapefile...")
-st_write(geo_data, output_path, delete_layer = TRUE)
-
-print("Done! You are ready to zip and upload.")
-```
-
-Just testing that this worked and we're all good to go with the zipping for GEE:
-
-```{r}
-
-# Try to read the NEW file back into R
-test_load <- st_read("data/precincts/nyt_2024_shapefiles_primarykey/precincts_id.shp")
-head(test_load)
-
-# Check if the ID column exists
-print(head(test_load$UUIDPKEY))
-
-# Check if it plots (just plot the first 100 rows to be fast)
-plot(st_geometry(test_load[1:100,]))
-```
