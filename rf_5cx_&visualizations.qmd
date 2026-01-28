@@ -23,7 +23,6 @@ library(Metrics)
 
 ```
 
-
 ### Predicting full 2020 presidential election using first-pass random forest
 
 ```{r}
@@ -97,8 +96,8 @@ cat("CV Complete. R-Squared:", round(cor(data_rf$TRUMPSHARE, data_rf$CV_Predicti
 
 ```
 
-
 Load and join geometry
+
 ```{r}
 
 cat("\nSTEP 2: Loading Geometry and Joining...\n")
@@ -120,6 +119,7 @@ map_data <- inner_join(geo_data, data_rf, by = "UUIDPKEY")
 ```
 
 Create 3 maps based on results
+
 ```{r}
 cat("\nSTEP 3: Optimizing for Web...\n")
 
@@ -213,12 +213,11 @@ create_election_map(
 
 cat("\nDONE! Created 3 HTML maps + their '_files' folders.")
 ```
-Test set performance: 
-R squared: 0.734
-RMSE: 0.1205
 
+Test set performance: R squared: 0.734 RMSE: 0.1205
 
 Predicting 2024 results with 2020-trained model
+
 ```{r}
 
 set.seed(42)
@@ -302,6 +301,7 @@ cat("========================================\n")
 ```
 
 CSVs of the results
+
 ```{r}
 
 head(data_rf)
@@ -312,9 +312,6 @@ data_rf <- data_rf %>%
 write_csv(data_rf, "rf_results.csv")
 
 ```
-
-
-
 
 ```{r}
 # ==========================================
@@ -380,4 +377,3 @@ simple <- lm(TRUMPSHARE ~ TOTALVOTES, data = train_df)
 summary(simple)
 
 ```
-

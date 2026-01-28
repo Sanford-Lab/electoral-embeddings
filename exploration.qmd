@@ -370,6 +370,21 @@ write_csv(mixed, "data/mixed/processed_mixed_embeddings_2020.csv")
 
 ```
 
+Temporary because no pkey -- just to get an initial look at predictive power
+```{r}
+
+mixed <- read.csv("data/mixed/precinctarea_embeddings_2020.csv")
+head(mixed)
+
+mixed <- mixed %>%
+  mutate(TRUMPSHARE = G20PRERTRU / TOTALVOTES) %>%
+  select(state, precinct_area, TOTALVOTES, TRUMPSHARE, G20PREDBID, G20PRERTRU, system.index, starts_with("A"))
+
+write_csv(mixed, "data/mixed/processed_mixedarea_embeddings_2020.csv")
+
+```
+
+
 Process mean precinct data 2020 with primary key
 ```{r}
 
@@ -434,6 +449,7 @@ READ IN PRECINCT DATA!
 
 df <- read.csv("data/mixed/processed_mixed_embeddings_2020.csv")
 dfsd <- read.csv("data/mixed/sd_processed_mixed_embeddings_2020_sd.csv")
+dfarea <- read.csv("data/mixed/processed_mixedarea_embeddings_2020.csv")
 
 ```
 
@@ -449,6 +465,10 @@ sum(df[df$TOTALVOTES < 5, ]$TOTALVOTES)   # only 3,510 votes total from precinct
 
 df2 <- df[df$TOTALVOTES >= 5, ]   # filter out tiny precincts
 dfsd2 <- dfsd[dfsd$TOTALVOTES >= 5, ]   # filter out tiny precincts for the sd set
+dfarea2 <- dfarea[dfarea$TOTALVOTES >= 5, ]   # filter out tiny precincts for the area set
+```
+
+```{r}
 
 ```
 
@@ -1105,3 +1125,124 @@ final_xgb_model
 
 
 
+
+
+
+
+VERY BOTTOM, JUST A TEST FOR AREA -- FIRST, WITHOUT AREA, USING 150m resolution
+WITHOUT FILTERING OUT THE TINY PRECINCTS, we get 0.711 performance on test set 
+```{r}
+# ==========================================
+# Random forest with ranger on embeddings
+# ==========================================
+
+set.seed(10)  # for reproducibility
+
+# Keep only the columns we need and drop NAs
+#    (assumes A00:A63 exist and are the 64 embedding dims)
+data_rf <- dfarea2 %>%
+  select(TRUMPSHARE, A00:A63) %>%
+  na.omit()
+
+# Train/test split (80/20)
+n <- nrow(data_rf)
+train_idx <- sample(seq_len(n), size = floor(0.8 * n))
+
+train_df <- data_rf[train_idx, ]
+test_df  <- data_rf[-train_idx, ]
+
+cat("Train rows:", nrow(train_df), " | Test rows:", nrow(test_df), "\n")
+
+# Fit ranger random forest
+rf_model <- ranger(
+  TRUMPSHARE ~ .,
+  data       = train_df,
+  num.trees  = 500,
+  mtry       = 8,
+  importance = "impurity",   # or "permutation" if you want stricter importance
+  seed       = 42
+)
+
+# Print a brief model summary (includes OOB R²)
+print(rf_model)
+
+# Predict on the test set
+rf_pred <- predict(rf_model, data = test_df)$predictions
+
+# Evaluate performance on the test set
+rss  <- sum((rf_pred - test_df$TRUMPSHARE)^2)
+tss  <- sum((test_df$TRUMPSHARE - mean(test_df$TRUMPSHARE))^2)
+r2   <- 1 - rss / tss
+rmse <- sqrt(mean((rf_pred - test_df$TRUMPSHARE)^2))
+
+cat("\nPerformance on test set:\n")
+cat("R²   =", round(r2, 3), "\n")
+cat("RMSE =", round(rmse, 4), "\n\n")
+
+# Variable importance summary
+imp <- sort(rf_model$variable.importance, decreasing = TRUE)
+
+cat("Top 10 most important features:\n")
+print(round(imp[1:10], 4))
+
+```
+0.736 R squared test set!
+
+NEXT, WITH AREA, JUST TO SEE THE DIFFERENCE!
+```{r}
+# ==========================================
+# Random forest with ranger on embeddings
+# ==========================================
+
+set.seed(10)  # for reproducibility
+
+# Keep only the columns we need and drop NAs
+#    (assumes A00:A63 exist and are the 64 embedding dims)
+data_rf <- dfarea2 %>%
+  select(TRUMPSHARE, precinct_area, A00:A63) %>%
+  na.omit()
+
+# Train/test split (80/20)
+n <- nrow(data_rf)
+train_idx <- sample(seq_len(n), size = floor(0.8 * n))
+
+train_df <- data_rf[train_idx, ]
+test_df  <- data_rf[-train_idx, ]
+
+cat("Train rows:", nrow(train_df), " | Test rows:", nrow(test_df), "\n")
+
+# Fit ranger random forest
+rf_model <- ranger(
+  TRUMPSHARE ~ .,
+  data       = train_df,
+  num.trees  = 500,
+  mtry       = 8,
+  importance = "impurity",   # or "permutation" if you want stricter importance
+  seed       = 42
+)
+
+# Print a brief model summary (includes OOB R²)
+print(rf_model)
+
+# Predict on the test set
+rf_pred <- predict(rf_model, data = test_df)$predictions
+
+# Evaluate performance on the test set
+rss  <- sum((rf_pred - test_df$TRUMPSHARE)^2)
+tss  <- sum((test_df$TRUMPSHARE - mean(test_df$TRUMPSHARE))^2)
+r2   <- 1 - rss / tss
+rmse <- sqrt(mean((rf_pred - test_df$TRUMPSHARE)^2))
+
+cat("\nPerformance on test set:\n")
+cat("R²   =", round(r2, 3), "\n")
+cat("RMSE =", round(rmse, 4), "\n\n")
+
+# Variable importance summary
+imp <- sort(rf_model$variable.importance, decreasing = TRUE)
+
+cat("Top 10 most important features:\n")
+print(round(imp[1:10], 4))
+
+```
+
+0.737 R squared test set - minimal improvement with area included.
