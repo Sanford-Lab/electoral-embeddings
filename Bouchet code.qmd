@@ -1,0 +1,111 @@
+---
+title: "Bouchet"
+format: html
+editor: visual
+---
+
+## Code for Bouchet
+
+```{r}
+# Load necessary libraries
+library(xgboost)
+library(caret)
+library(dplyr)
+library(doParallel)
+
+# Load data
+df <- read.csv("data/mixed/processed_area_std_uuid.csv")
+
+# 1. Setup Parallel Processing (Adjust for your cluster's core count)
+# -------------------------------------------------------------------------
+cores <- parallel::detectCores() - 1 
+cl <- makePSOCKcluster(cores)
+registerDoParallel(cl)
+cat("Using", cores, "cores for parallel tuning...\n")
+
+
+# 2. Data Preparation
+# -------------------------------------------------------------------------
+set.seed(42)
+
+# Select target, precinct_area, and all embedding-related columns
+# This regex catches 'mean', 'skew', and 'stdDev'
+data_modeling <- df %>%
+  select(TRUMPSHARE, precinct_area, matches("A[0-9]{2}_(mean|skew|stdDev)")) %>%
+  na.omit()
+
+# Split into Train (80%) and Test (20%)
+train_idx <- createDataPartition(data_modeling$TRUMPSHARE, p = 0.8, list = FALSE)
+train_df  <- data_modeling[train_idx, ]
+test_df   <- data_modeling[-train_idx, ]
+
+# 3. Define the Hyperparameter Grid
+# -------------------------------------------------------------------------
+# This grid tests 144 combinations. On a cluster, this should be fast.
+xgb_grid <- expand.grid(
+  nrounds = c(1000, 2000),             # Number of boosting iterations
+  max_depth = c(4, 6, 8),               # Tree complexity
+  eta = c(0.01, 0.05),                  # Learning rate (lower is usually better)
+  gamma = c(0, 1),                      # Minimum loss reduction to split
+  colsample_bytree = c(0.3, 0.5, 0.7),  # % of features to use per tree (CRITICAL)
+  min_child_weight = c(1, 5),           # Prevents overfitting on small clusters
+  subsample = c(0.7, 0.9)               # % of rows to use per tree
+)
+
+# 4. Train with Cross-Validation
+# -------------------------------------------------------------------------
+train_control <- trainControl(
+  method = "cv",
+  number = 5,                          # 5-fold Cross-Validation
+  allowParallel = TRUE,
+  verboseIter = TRUE
+)
+
+cat("Starting Grid Search. This may take a while depending on data size...\n")
+
+xgb_model <- train(
+  TRUMPSHARE ~ .,
+  data = train_df,
+  method = "xgbTree",
+  trControl = train_control,
+  tuneGrid = xgb_grid,
+  metric = "Rsquared"
+)
+
+# Stop the cluster once finished
+stopCluster(cl)
+
+# 5. Evaluate on Test Set
+# -------------------------------------------------------------------------
+predictions <- predict(xgb_model, newdata = test_df)
+postResample(predictions, test_df$TRUMPSHARE)
+
+# 6. Check Feature Importance
+# -------------------------------------------------------------------------
+# This will show you exactly how much 'precinct_area' vs 'AXX_mean' contributed
+importance <- varImp(xgb_model, scale = FALSE)
+print(importance)
+
+# Save the best model
+saveRDS(xgb_model, "best_trump_share_model.rds")
+```
+
+## Splitting by density to improve R squared..?
+
+```{r}
+
+library(rpart)
+
+df <- read.csv("data/mixed/processed_area_std_uuid.csv")
+
+df$density_km2 <- (df$TOTALVOTES / df$precinct_area) * 1000000
+
+# Train a tiny tree with ONLY density as a predictor
+split_tree <- rpart(TRUMPSHARE ~ density_km2, data = df, control = rpart.control(maxdepth = 1))
+
+# The first split point is your optimal threshold
+threshold <- split_tree$splits[1, "index"]
+cat("The mathematically optimal split point is:", threshold, "voters per km2")
+
+
+```

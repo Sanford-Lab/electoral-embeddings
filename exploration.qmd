@@ -443,6 +443,25 @@ mixed_sd <- mixed_sd %>%
 write_csv(mixed_sd, "data/mixed/sd_processed_mixed_embeddings_2020_sd.csv")
 ```
 
+PROCESS STD + SKEW DATA 2020 KEEP UUID AND PRECINCT AREA
+```{r}
+mixed_std <- read.csv("data/mixed/precinct_embeddings_2020_mean_area_std.csv")
+head(mixed_std)
+
+mixed_std <- mixed_std %>%
+  mutate(TRUMPSHARE = G20PRERTRU / TOTALVOTES) %>%
+  select(state, TOTALVOTES, TRUMPSHARE, G20PREDBID, G20PRERTRU, precinct_area, UUIDPKEY, starts_with("A"))
+
+write_csv(mixed_std, "data/mixed/processed_area_std_uuid.csv")
+```
+
+```{r}
+csv <- read.csv("data/mixed/processed_area_std_uuid.csv")
+colnames(csv)
+head(csv)
+```
+
+
 
 READ IN PRECINCT DATA!
 ```{r}
@@ -470,6 +489,60 @@ dfarea2 <- dfarea[dfarea$TOTALVOTES >= 5, ]   # filter out tiny precincts for th
 
 ```{r}
 
+# ==========================================
+# Random forest with ranger on embeddings
+# ==========================================
+
+set.seed(10)  # for reproducibility
+
+# Keep only the columns we need and drop NAs
+#    (assumes A00:A63 exist and are the 64 embedding dims)
+data_rf <- csv %>%
+  select(TRUMPSHARE, precinct_area, TOTALVOTES) %>%
+  na.omit()
+
+# Train/test split (80/20)
+n <- nrow(data_rf)
+train_idx <- sample(seq_len(n), size = floor(0.8 * n))
+
+train_df <- data_rf[train_idx, ]
+test_df  <- data_rf[-train_idx, ]
+
+cat("Train rows:", nrow(train_df), " | Test rows:", nrow(test_df), "\n")
+
+# Fit ranger random forest
+rf_model <- ranger(
+  TRUMPSHARE ~ .,
+  data       = train_df,
+  num.trees  = 500,
+  mtry       = 2,
+  importance = "impurity",   # or "permutation" if you want stricter importance
+  seed       = 42
+)
+
+# Print a brief model summary (includes OOB R²)
+print(rf_model)
+
+# Predict on the test set
+rf_pred <- predict(rf_model, data = test_df)$predictions
+
+# Evaluate performance on the test set
+rss  <- sum((rf_pred - test_df$TRUMPSHARE)^2)
+tss  <- sum((test_df$TRUMPSHARE - mean(test_df$TRUMPSHARE))^2)
+r2   <- 1 - rss / tss
+rmse <- sqrt(mean((rf_pred - test_df$TRUMPSHARE)^2))
+
+cat("\nPerformance on test set:\n")
+cat("R²   =", round(r2, 3), "\n")
+cat("RMSE =", round(rmse, 4), "\n\n")
+
+# Variable importance summary
+imp <- sort(rf_model$variable.importance, decreasing = TRUE)
+
+cat("Top 10 most important features:\n")
+print(round(imp[1:10], 4))
+
+
 ```
 
 
@@ -484,6 +557,14 @@ model <- lm(formula, data = df2)
 summary(model)
 
 ```
+
+```{r}
+
+summary(lm(TRUMPSHARE ~ TOTALVOTES + precinct_area + state, data = csv))
+
+```
+
+
 
 Random Forest with default 500 trees and minimum node size of 5
 ```{r}
