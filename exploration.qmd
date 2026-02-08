@@ -332,6 +332,9 @@ nrow(nyt)
 
 ak <- st_read("data/mixed/unzipped_pkey/ak/ak_2020.shp")
 
+test <- read.csv("data/prep/precincts/processed_area_std_uuid.csv")
+
+
 ```
 
 
@@ -633,6 +636,78 @@ RMSE: 0.121
 Test set performance (set seed 10): 
 R squared: 0.734
 RMSE: 0.1206
+
+WITH THE NEW DATA (newer version, same data) let's see what we get
+```{r}
+
+library(tidyverse)
+library(ranger)
+
+# ==========================================
+# 1. Load and Prepare Data
+# ==========================================
+
+# Load the new clean 2020 dataset
+clean_data <- read_csv("data/prep/precincts/2020/clean_emb_precinct_20.csv")
+
+# Prepare data for RF:
+# 1. Rename rep_share -> TRUMPSHARE to match your existing RF code
+# 2. Select TRUMPSHARE and ONLY the columns ending in "_mean" (the embedding means)
+data_rf <- clean_data %>%
+  select(TRUMPSHARE = rep_share, ends_with("_mean")) %>%
+  na.omit()
+
+# Check to ensure we have the right dimensions (Expect ~65 columns: 1 target + 64 features)
+cat("Data dimensions:", dim(data_rf)[1], "rows x", dim(data_rf)[2], "columns\n")
+
+# ==========================================
+# 2. Random forest with ranger (UNMODIFIED)
+# ==========================================
+
+set.seed(10)  # for reproducibility
+
+# Train/test split (80/20)
+n <- nrow(data_rf)
+train_idx <- sample(seq_len(n), size = floor(0.8 * n))
+
+train_df <- data_rf[train_idx, ]
+test_df  <- data_rf[-train_idx, ]
+
+cat("Train rows:", nrow(train_df), " | Test rows:", nrow(test_df), "\n")
+
+# Fit ranger random forest
+rf_model <- ranger(
+  TRUMPSHARE ~ .,
+  data       = train_df,
+  num.trees  = 500,
+  mtry       = 8,
+  importance = "impurity",   # or "permutation" if you want stricter importance
+  seed       = 42
+)
+
+# Print a brief model summary (includes OOB R²)
+print(rf_model)
+
+# Predict on the test set
+rf_pred <- predict(rf_model, data = test_df)$predictions
+
+# Evaluate performance on the test set
+rss  <- sum((rf_pred - test_df$TRUMPSHARE)^2)
+tss  <- sum((test_df$TRUMPSHARE - mean(test_df$TRUMPSHARE))^2)
+r2   <- 1 - rss / tss
+rmse <- sqrt(mean((rf_pred - test_df$TRUMPSHARE)^2))
+
+cat("\nPerformance on test set:\n")
+cat("R²   =", round(r2, 3), "\n")
+cat("RMSE =", round(rmse, 4), "\n\n")
+
+# Variable importance summary
+imp <- sort(rf_model$variable.importance, decreasing = TRUE)
+
+cat("Top 10 most important features:\n")
+print(round(imp[1:10], 4))
+
+```
 
 
 Random forest on larger dataset with mean, stdDev, and skew features
@@ -1327,3 +1402,51 @@ print(round(imp[1:10], 4))
 ```
 
 0.737 R squared test set - minimal improvement with area included.
+
+
+```{r}
+library(sf)
+
+# 1. Define path to the specific MI zip
+mi_zip <- "data/prep/precincts/2020/raw_precinct_20/mi_2020.zip"
+
+# 2. Unzip to a temporary folder just to look
+peek_dir <- file.path(tempdir(), "mi_peek")
+unzip(mi_zip, exdir = peek_dir)
+
+# 3. Read ONLY the header/attributes (using query to keep it fast)
+# Find the .shp file
+mi_shp <- list.files(peek_dir, pattern = "\\.shp$", recursive = TRUE, full.names = TRUE)[1]
+
+# Peek at names
+mi_data <- st_read(mi_shp, quiet = TRUE)
+print(names(mi_data))
+
+# Optional: specifically check for long names (>10 chars) that will cause the error
+long_names <- names(mi_data)[nchar(names(mi_data)) > 10]
+if(length(long_names) > 0) {
+  cat("\nWarning: These columns will be truncated/clash:\n")
+  print(long_names)
+}
+
+# Cleanup the peek folder
+unlink(peek_dir, recursive = TRUE)
+```
+
+```{r}
+master <- read.csv("data/prep/precincts/2020/raw_emb_precinct_20.csv")
+head(master$A00_mean)
+colnames(master)
+
+master24 <- read.csv("data/prep/precincts/2024/raw_emb_precinct_24.csv")
+colnames(master24)
+
+clean_24_emb <- read.csv("data/prep/precincts/2024/clean_emb_precinct_24.csv")
+colnames(clean_24_emb)
+head(clean_24_emb$state)
+
+old <- read.csv("data/prep/precincts/2020/precinct_embeddings_2020_mean_area_std.csv")
+head(old$A00_mean)
+
+```
+
