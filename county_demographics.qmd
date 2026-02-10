@@ -1,0 +1,64 @@
+---
+title: "county_demographics"
+format: html
+editor: visual
+---
+
+```{r}
+library(tidyr)
+library(dplyr)
+
+edu <- read.csv("data/prep/counties/Education2023.csv")
+head(edu, 20)
+edu_flat <- edu %>%
+  pivot_wider(
+    # The columns that identify a unique row
+    id_cols = c(FIPS.Code, State, Area.name), 
+    
+    # The column containing the new column names
+    names_from = Attribute, 
+    
+    # The column containing the values to fill the cells
+    values_from = Value
+  )
+
+# Check the result
+head(edu_flat)
+
+
+emp <- read.csv("data/prep/counties/Unemployment2023.csv")
+head(emp, 20)
+
+emp_flat <- emp %>%
+  pivot_wider(
+    # The columns that identify a unique row
+    id_cols = c(FIPS_Code, State, Area_Name), 
+    
+    # The column containing the new column names
+    names_from = Attribute, 
+    
+    # The column containing the values to fill the cells
+    values_from = Value
+  )
+
+# Check the result
+head(emp_flat)
+
+pop <- read.csv("data/prep/counties/PopulationEstimates.csv")
+head(pop, 20)
+
+pop_flat <- pop %>%
+  pivot_wider(
+    # The columns that identify a unique row
+    id_cols = c(FIPStxt, State, Area_Name), 
+    
+    # The column containing the new column names
+    names_from = Attribute, 
+    
+    # The column containing the values to fill the cells
+    values_from = Value
+  )
+
+# Check the result
+head(pop_flat)
+```

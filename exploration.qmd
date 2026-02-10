@@ -5,7 +5,7 @@ format: html
 
 ```{r}
 
-county <- read.csv("data/counties/2020_county_presidential.csv")
+county <- read.csv("data/prep/counties/2020_county_presidential.csv")
 head(county)                          # checking the data loaded correctly
 unique(county$state_name)             # just checking all 50 are present
 unique(county$county_fips)    # checking number of unique counties
@@ -637,7 +637,7 @@ Test set performance (set seed 10):
 R squared: 0.734
 RMSE: 0.1206
 
-WITH THE NEW DATA (newer version, same data) let's see what we get
+2020 -- WITH THE NEW DATA (newer version, same data) let's see what we get
 ```{r}
 
 library(tidyverse)
@@ -647,26 +647,25 @@ library(ranger)
 # 1. Load and Prepare Data
 # ==========================================
 
-# Load the new clean 2020 dataset
+# Load the clean 2020 dataset
 clean_data <- read_csv("data/prep/precincts/2020/clean_emb_precinct_20.csv")
 
-# Prepare data for RF:
-# 1. Rename rep_share -> TRUMPSHARE to match your existing RF code
-# 2. Select TRUMPSHARE and ONLY the columns ending in "_mean" (the embedding means)
+# Prepare data:
+# Keep ID and Density for analysis, but we will EXCLUDE them from the model formula later.
 data_rf <- clean_data %>%
-  select(TRUMPSHARE = rep_share, ends_with("_mean")) %>%
-  na.omit()
-
-# Check to ensure we have the right dimensions (Expect ~65 columns: 1 target + 64 features)
-cat("Data dimensions:", dim(data_rf)[1], "rows x", dim(data_rf)[2], "columns\n")
+  select(
+    precinct_id, 
+    vote_density, 
+    TRUMPSHARE = rep_share, 
+    ends_with("_mean") # Only embedding means
+  ) %>%
+  na.omit() 
 
 # ==========================================
-# 2. Random forest with ranger (UNMODIFIED)
+# 2. Split Data (80/20)
 # ==========================================
 
-set.seed(10)  # for reproducibility
-
-# Train/test split (80/20)
+set.seed(10)
 n <- nrow(data_rf)
 train_idx <- sample(seq_len(n), size = floor(0.8 * n))
 
@@ -675,37 +674,225 @@ test_df  <- data_rf[-train_idx, ]
 
 cat("Train rows:", nrow(train_df), " | Test rows:", nrow(test_df), "\n")
 
-# Fit ranger random forest
+# ==========================================
+# 3. Random Forest (Modified Formula)
+# ==========================================
+
+# NOTE: We subtract ID and density from the formula so the model 
+# doesn't train on them, but they stay in the dataframe.
 rf_model <- ranger(
-  TRUMPSHARE ~ .,
+  TRUMPSHARE ~ . - precinct_id - vote_density, 
   data       = train_df,
   num.trees  = 500,
   mtry       = 8,
-  importance = "impurity",   # or "permutation" if you want stricter importance
+  importance = "impurity",
   seed       = 42
 )
 
-# Print a brief model summary (includes OOB R²)
 print(rf_model)
 
-# Predict on the test set
-rf_pred <- predict(rf_model, data = test_df)$predictions
+# ==========================================
+# 4. Predict & Join Results
+# ==========================================
 
-# Evaluate performance on the test set
-rss  <- sum((rf_pred - test_df$TRUMPSHARE)^2)
-tss  <- sum((test_df$TRUMPSHARE - mean(test_df$TRUMPSHARE))^2)
+# Make predictions on test set
+preds <- predict(rf_model, data = test_df)$predictions
+
+# Create a results dataframe with original metadata
+results <- test_df %>%
+  mutate(
+    Predicted_Share = preds,
+    Error = Predicted_Share - TRUMPSHARE,
+    Abs_Error = abs(Error)
+  )
+
+# Overall Performance Metrics
+rss  <- sum(results$Error^2)
+tss  <- sum((results$TRUMPSHARE - mean(results$TRUMPSHARE))^2)
 r2   <- 1 - rss / tss
-rmse <- sqrt(mean((rf_pred - test_df$TRUMPSHARE)^2))
+rmse <- sqrt(mean(results$Error^2))
 
-cat("\nPerformance on test set:\n")
-cat("R²   =", round(r2, 3), "\n")
-cat("RMSE =", round(rmse, 4), "\n\n")
+cat("\nTest Set R²:", round(r2, 3))
+cat("\nTest Set RMSE:", round(rmse, 4), "\n")
 
-# Variable importance summary
-imp <- sort(rf_model$variable.importance, decreasing = TRUE)
+# ==========================================
+# 5. Plot 1: Prediction Error vs. Density
+# ==========================================
 
-cat("Top 10 most important features:\n")
-print(round(imp[1:10], 4))
+# We use log10 scale for density because it spans orders of magnitude
+plot1 <- ggplot(results, aes(x = vote_density, y = Error)) +
+  geom_point(alpha = 0.3, size = 0.5) +
+  geom_hline(yintercept = 0, color = "red", linetype = "dashed") +
+  geom_smooth(method = "loess", color = "blue", se = FALSE) +
+  scale_x_log10(labels = scales::comma) +
+  labs(
+    title = "Prediction Error vs. Voter Density",
+    subtitle = "Positive Error = Model Overpredicted Trump Share",
+    x = "Voters per km² (Log Scale)",
+    y = "Prediction Error (Pred - Actual)"
+  ) +
+  theme_minimal()
+
+print(plot1)
+
+# ==========================================
+# 6. Plot 2: R-squared per Density Decile
+# ==========================================
+
+# 1. Bin density into 10 deciles
+decile_stats <- results %>%
+  mutate(density_decile = ntile(vote_density, 10)) %>%
+  group_by(density_decile) %>%
+  summarize(
+    avg_density = median(vote_density),
+    n = n(),
+    RSS = sum(Error^2),
+    TSS = sum((TRUMPSHARE - mean(TRUMPSHARE))^2),
+    # R2 calculation per group
+    R2 = 1 - (RSS / TSS)
+  )
+
+# 2. Plot performance by decile
+plot2 <- ggplot(decile_stats, aes(x = factor(density_decile), y = R2)) +
+  geom_col(fill = "steelblue") +
+  geom_text(aes(label = round(R2, 2)), vjust = -0.5) +
+  labs(
+    title = "Model Performance by Density Decile",
+    subtitle = "Does the model understand rural areas better than urban ones?",
+    x = "Density Decile (1 = Most Rural, 10 = Most Urban)",
+    y = "R-squared"
+  ) +
+  theme_minimal()
+
+print(plot2)
+```
+```{r}
+
+library(tidyverse)
+library(ranger)
+
+# ==========================================
+# 1. Load and Prepare Data
+# ==========================================
+
+# Load the clean 2024 dataset
+clean_data <- read_csv("data/prep/precincts/2024/clean_emb_precinct_24.csv")
+
+# Prepare data:
+# Keep ID and Density for analysis, but we will EXCLUDE them from the model formula later.
+data_rf <- clean_data %>%
+  select(
+    precinct_id, 
+    vote_density, 
+    TRUMPSHARE = rep_share, 
+    ends_with("_mean") # Only embedding means
+  ) %>%
+  na.omit() 
+
+# ==========================================
+# 2. Split Data (80/20)
+# ==========================================
+
+set.seed(10)
+n <- nrow(data_rf)
+train_idx <- sample(seq_len(n), size = floor(0.8 * n))
+
+train_df <- data_rf[train_idx, ]
+test_df  <- data_rf[-train_idx, ]
+
+cat("Train rows:", nrow(train_df), " | Test rows:", nrow(test_df), "\n")
+
+# ==========================================
+# 3. Random Forest (Modified Formula)
+# ==========================================
+
+# NOTE: We subtract ID and density from the formula so the model 
+# doesn't train on them, but they stay in the dataframe.
+rf_model <- ranger(
+  TRUMPSHARE ~ . - precinct_id - vote_density, 
+  data       = train_df,
+  num.trees  = 500,
+  mtry       = 8,
+  importance = "impurity",
+  seed       = 42
+)
+
+print(rf_model)
+
+# ==========================================
+# 4. Predict & Join Results
+# ==========================================
+
+# Make predictions on test set
+preds <- predict(rf_model, data = test_df)$predictions
+
+# Create a results dataframe with original metadata
+results <- test_df %>%
+  mutate(
+    Predicted_Share = preds,
+    Error = Predicted_Share - TRUMPSHARE,
+    Abs_Error = abs(Error)
+  )
+
+# Overall Performance Metrics
+rss  <- sum(results$Error^2)
+tss  <- sum((results$TRUMPSHARE - mean(results$TRUMPSHARE))^2)
+r2   <- 1 - rss / tss
+rmse <- sqrt(mean(results$Error^2))
+
+cat("\nTest Set R²:", round(r2, 3))
+cat("\nTest Set RMSE:", round(rmse, 4), "\n")
+
+# ==========================================
+# 5. Plot 1: Prediction Error vs. Density
+# ==========================================
+
+# We use log10 scale for density because it spans orders of magnitude
+plot1 <- ggplot(results, aes(x = vote_density, y = Error)) +
+  geom_point(alpha = 0.3, size = 0.5) +
+  geom_hline(yintercept = 0, color = "red", linetype = "dashed") +
+  geom_smooth(method = "loess", color = "blue", se = FALSE) +
+  scale_x_log10(labels = scales::comma) +
+  labs(
+    title = "Prediction Error vs. Voter Density",
+    subtitle = "Positive Error = Model Overpredicted Trump Share",
+    x = "Voters per km² (Log Scale)",
+    y = "Prediction Error (Pred - Actual)"
+  ) +
+  theme_minimal()
+
+print(plot1)
+
+# ==========================================
+# 6. Plot 2: R-squared per Density Decile
+# ==========================================
+
+# 1. Bin density into 10 deciles
+decile_stats <- results %>%
+  mutate(density_decile = ntile(vote_density, 10)) %>%
+  group_by(density_decile) %>%
+  summarize(
+    avg_density = median(vote_density),
+    n = n(),
+    RSS = sum(Error^2),
+    TSS = sum((TRUMPSHARE - mean(TRUMPSHARE))^2),
+    # R2 calculation per group
+    R2 = 1 - (RSS / TSS)
+  )
+
+# 2. Plot performance by decile
+plot2 <- ggplot(decile_stats, aes(x = factor(density_decile), y = R2)) +
+  geom_col(fill = "steelblue") +
+  geom_text(aes(label = round(R2, 2)), vjust = -0.5) +
+  labs(
+    title = "Model Performance by Density Decile",
+    subtitle = "Does the model understand rural areas better than urban ones?",
+    x = "Density Decile (1 = Most Rural, 10 = Most Urban)",
+    y = "R-squared"
+  ) +
+  theme_minimal()
+
+print(plot2)
 
 ```
 

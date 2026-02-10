@@ -1,0 +1,316 @@
+---
+title: "precinct_models"
+format: html
+editor: visual
+---
+
+## 5-Fold CV for 2020 (Predicting Trump Share)
+
+This script takes ~XXX min to run
+
+```{r}
+library(tidyverse)
+library(ranger)
+library(scales) # for comma labels in plots
+
+# ==========================================
+# 1. Load and Clean Data
+# ==========================================
+
+# Load the clean 2020 precinct dataset
+clean_data <- read_csv("data/prep/precincts/2020/clean_emb_precinct_20.csv")
+
+# Prepare data:
+# Keep ID and Density for analysis, but we will EXCLUDE them from the model formula later.
+data_rf <- clean_data %>%
+  select(
+    precinct_id, 
+    vote_density, 
+    TRUMPSHARE = rep_share, 
+    ends_with("_mean") # Only embedding means
+  ) %>%
+  na.omit()
+
+cat("Data Loaded. Precincts:", nrow(data_rf), "\n")
+
+# ==========================================
+# 2. Setup 5-Fold Cross-Validation
+# ==========================================
+
+set.seed(42)
+
+# Create 5 random folds
+# We shuffle the data first, then assign a fold number (1 through 5)
+data_rf <- data_rf %>%
+  mutate(fold_id = sample(rep(1:5, length.out = n())))
+
+# Initialize an empty list to store predictions
+all_predictions <- list()
+
+cat("Starting 5-Fold Cross-Validation on", nrow(data_rf), "precincts...\n")
+
+# ==========================================
+# 3. The CV Loop
+# ==========================================
+
+for(k in 1:5) {
+  
+  # A. Split Data
+  train_df <- data_rf %>% filter(fold_id != k)
+  test_df  <- data_rf %>% filter(fold_id == k)
+  
+  # B. Train Model
+  # Standard Regression Rule: mtry = Number of features / 3
+  n_features <- ncol(train_df) - 4 # Subtract ID, density, share, fold_id
+  # my_mtry    <- floor(n_features / 3)
+  
+  rf_model <- ranger(
+    TRUMPSHARE ~ . - precinct_id - vote_density - fold_id, 
+    data       = train_df,
+    num.trees  = 500,
+    mtry       = 8, # my_mtry, # Dynamic (approx 21 for 64 embeddings)
+    importance = "impurity",
+    seed       = 42
+  )
+  
+  # C. Predict
+  preds <- predict(rf_model, data = test_df)$predictions
+  
+  # D. Store Results
+  test_df$Predicted_Share <- preds
+  all_predictions[[k]] <- test_df
+  
+  cat("  Fold", k, "complete. Rows predicted:", nrow(test_df), "\n")
+}
+
+# Combine all 5 folds back into one big dataframe
+full_results <- bind_rows(all_predictions) %>%
+  mutate(
+    Error = Predicted_Share - TRUMPSHARE,
+    Abs_Error = abs(Error)
+  )
+
+# ==========================================
+# 4. Overall Performance Metrics
+# ==========================================
+
+# Calculate metrics on the full dataset (all folds combined)
+rss  <- sum(full_results$Error^2)
+tss  <- sum((full_results$TRUMPSHARE - mean(full_results$TRUMPSHARE))^2)
+r2   <- 1 - (rss / tss)
+rmse <- sqrt(mean(full_results$Error^2))
+
+cat("\n==========================================")
+cat("\nOVERALL PRECINCT CV RESULTS")
+cat("\n==========================================")
+cat("\nR-Squared: ", round(r2, 3))
+cat("\nRMSE:      ", round(rmse, 4))
+cat("\nMean Abs Error:", round(mean(full_results$Abs_Error), 4))
+cat("\n==========================================\n")
+
+# ==========================================
+# 5. Plot 1: Prediction Error vs. Density
+# ==========================================
+
+# Using log10 scale because precinct density varies wildly
+plot1 <- ggplot(full_results, aes(x = vote_density, y = Error)) +
+  geom_point(alpha = 0.1, size = 0.2) + # High transparency for dense data
+  geom_hline(yintercept = 0, color = "red", linetype = "dashed") +
+  geom_smooth(method = "loess", color = "blue", se = FALSE) +
+  scale_x_log10(labels = scales::comma) + 
+  labs(
+    title = "Precinct Prediction Error vs. Voter Density (5-Fold CV)",
+    subtitle = paste0("R² = ", round(r2, 3), " | RMSE = ", round(rmse, 3)),
+    x = "Voters per km² (Log Scale)",
+    y = "Error (Predicted - Actual)"
+  ) +
+  theme_minimal()
+
+print(plot1)
+
+# ==========================================
+# 6. Plot 2: R-squared per Density Decile
+# ==========================================
+
+decile_stats <- full_results %>%
+  mutate(density_decile = ntile(vote_density, 10)) %>%
+  group_by(density_decile) %>%
+  summarize(
+    avg_density = median(vote_density),
+    n = n(),
+    RSS = sum(Error^2),
+    TSS = sum((TRUMPSHARE - mean(TRUMPSHARE))^2),
+    # Safety check: avoid dividing by zero if TSS is 0
+    R2 = if_else(TSS > 1e-6, 1 - (RSS / TSS), 0)
+  )
+
+plot2 <- ggplot(decile_stats, aes(x = factor(density_decile), y = R2)) +
+  geom_col(fill = "steelblue") +
+  geom_text(aes(label = round(R2, 2)), vjust = -0.5) +
+  labs(
+    title = "Model Performance by Density Decile (Precincts)",
+    subtitle = "Decile 1 = Most Rural, Decile 10 = Most Urban",
+    x = "Density Decile",
+    y = "R-squared"
+  ) +
+  theme_minimal()
+
+print(plot2)
+
+write_csv(full_results, "data/results/precinct20_m1_results.csv")
+```
+
+
+## 5-Fold CV for 2024 (Predicting Trump Share)
+
+This script takes ~XXX min to run
+```{r}
+
+# ==========================================
+# 1. Load and Clean Data (2024)
+# ==========================================
+
+# Load the clean 2024 precinct dataset
+clean_data <- read_csv("data/prep/precincts/2024/clean_emb_precinct_24.csv")
+
+# Prepare data:
+# Keep ID and Density for analysis, but we will EXCLUDE them from the model formula later.
+data_rf <- clean_data %>%
+  select(
+    precinct_id, 
+    vote_density, 
+    TRUMPSHARE = rep_share, 
+    ends_with("_mean") # Only embedding means
+  ) %>%
+  na.omit()
+
+cat("Data Loaded. 2024 Precincts:", nrow(data_rf), "\n")
+
+# ==========================================
+# 2. Setup 5-Fold Cross-Validation
+# ==========================================
+
+set.seed(42)
+
+# Create 5 random folds
+# We shuffle the data first, then assign a fold number (1 through 5)
+data_rf <- data_rf %>%
+  mutate(fold_id = sample(rep(1:5, length.out = n())))
+
+# Initialize an empty list to store predictions
+all_predictions <- list()
+
+cat("Starting 5-Fold Cross-Validation on", nrow(data_rf), "precincts...\n")
+
+# ==========================================
+# 3. The CV Loop
+# ==========================================
+
+for(k in 1:5) {
+  
+  # A. Split Data
+  train_df <- data_rf %>% filter(fold_id != k)
+  test_df  <- data_rf %>% filter(fold_id == k)
+  
+  # B. Train Model
+  # Standard Regression Rule: mtry = Number of features / 3
+  n_features <- ncol(train_df) - 4 # Subtract ID, density, share, fold_id
+  # my_mtry    <- floor(n_features / 3)
+  
+  rf_model <- ranger(
+    TRUMPSHARE ~ . - precinct_id - vote_density - fold_id, 
+    data       = train_df,
+    num.trees  = 500,
+    mtry       = 8, # my_mtry, # Dynamic (approx 21 for 64 embeddings)
+    importance = "impurity",
+    seed       = 42
+  )
+  
+  # C. Predict
+  preds <- predict(rf_model, data = test_df)$predictions
+  
+  # D. Store Results
+  test_df$Predicted_Share <- preds
+  all_predictions[[k]] <- test_df
+  
+  cat("  Fold", k, "complete. Rows predicted:", nrow(test_df), "\n")
+}
+
+# Combine all 5 folds back into one big dataframe
+full_results <- bind_rows(all_predictions) %>%
+  mutate(
+    Error = Predicted_Share - TRUMPSHARE,
+    Abs_Error = abs(Error)
+  )
+
+# ==========================================
+# 4. Overall Performance Metrics
+# ==========================================
+
+# Calculate metrics on the full dataset (all folds combined)
+rss  <- sum(full_results$Error^2)
+tss  <- sum((full_results$TRUMPSHARE - mean(full_results$TRUMPSHARE))^2)
+r2   <- 1 - (rss / tss)
+rmse <- sqrt(mean(full_results$Error^2))
+
+cat("\n==========================================")
+cat("\nOVERALL PRECINCT CV RESULTS (2024)")
+cat("\n==========================================")
+cat("\nR-Squared: ", round(r2, 3))
+cat("\nRMSE:      ", round(rmse, 4))
+cat("\nMean Abs Error:", round(mean(full_results$Abs_Error), 4))
+cat("\n==========================================\n")
+
+# ==========================================
+# 5. Plot 1: Prediction Error vs. Density
+# ==========================================
+
+# Using log10 scale because precinct density varies wildly
+plot1 <- ggplot(full_results, aes(x = vote_density, y = Error)) +
+  geom_point(alpha = 0.1, size = 0.2) + # High transparency for dense data
+  geom_hline(yintercept = 0, color = "red", linetype = "dashed") +
+  geom_smooth(method = "loess", color = "blue", se = FALSE) +
+  scale_x_log10(labels = scales::comma) + 
+  labs(
+    title = "Precinct Prediction Error vs. Voter Density (2024, 5-Fold CV)",
+    subtitle = paste0("R² = ", round(r2, 3), " | RMSE = ", round(rmse, 3)),
+    x = "Voters per km² (Log Scale)",
+    y = "Error (Predicted - Actual)"
+  ) +
+  theme_minimal()
+
+print(plot1)
+
+# ==========================================
+# 6. Plot 2: R-squared per Density Decile
+# ==========================================
+
+decile_stats <- full_results %>%
+  mutate(density_decile = ntile(vote_density, 10)) %>%
+  group_by(density_decile) %>%
+  summarize(
+    avg_density = median(vote_density),
+    n = n(),
+    RSS = sum(Error^2),
+    TSS = sum((TRUMPSHARE - mean(TRUMPSHARE))^2),
+    # Safety check: avoid dividing by zero if TSS is 0
+    R2 = if_else(TSS > 1e-6, 1 - (RSS / TSS), 0)
+  )
+
+plot2 <- ggplot(decile_stats, aes(x = factor(density_decile), y = R2)) +
+  geom_col(fill = "steelblue") +
+  geom_text(aes(label = round(R2, 2)), vjust = -0.5) +
+  labs(
+    title = "Model Performance by Density Decile (2024 Precincts)",
+    subtitle = "Decile 1 = Most Rural, Decile 10 = Most Urban",
+    x = "Density Decile",
+    y = "R-squared"
+  ) +
+  theme_minimal()
+
+print(plot2)
+
+write_csv(full_results, "data/results/precinct24_m1_results.csv")
+
+```
+

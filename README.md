@@ -20,35 +20,46 @@ through every state.
 For this step, there should now be 51 zip files — I manually stored them
 in a folder called 'og_zipped'. Path should be: `data/mixed/og_zipped`.
 
-Then run the script `2020_precincts_prep.R` to unzip, append with uuid
+Then run the script `2020_precincts_prep.R` to unzip, append with
 primary keys, then re-zipped for GEE use.
 
-``` r
-source("2020_precincts_prep.R")
-```
-
-**NYT data for 2024** is obtained from the detailed election map
-released by NYT ([download
+**2024 precinct-level results** are obtained from the [NYT github
+repo](#0) they use for their extremely detailed election map ([download
+topojson
 link](https://int.nyt.com/newsgraphics/elections/map-data/2024/national/precincts-with-results.topojson.gz)).
-Rename it `precincts-with-results.topojson`. Then in terminal, we
-convert it to shapefile using `ogr2ogr`.
+Rename the topojson `raw_precinct_24.topojson` and add it to
+`data/prep/precincts/2024`.
 
-IN TERMINAL: first run `brew install gdal` to install `gdal` if not
-already installed. Then run (first replace the paths with the correct
-paths):
+Now you can run the script `clean_24_precinct.R` to convert to shp,
+append with primary keys, and zip for GEE use.
 
-`ogr2ogr -f "ESRI Shapefile" .../electoral-embeddings/data/precincts/nyt_2024_shapefiles ...inputpath/precincts-with-results.topojson -s_srs EPSG:4326 -t_srs EPSG:4326 -lco ENCODING=UTF-8`
+**2020 county shapefiles** are from the census, link
+[here](https://www2.census.gov/geo/tiger/TIGER2020/COUNTY/)
 
-Finally, once the folder is created, multi-select the 5 newly created
-files, right click, and compress. This creates a file called
-`Archive.zip`. Run the chunk in `primary_key_generation.qmd` to add
-primary keys, then re-compress for GEE use.
+**2024 county shapefiles** are also from the census, link
+[here](https://www2.census.gov/geo/tiger/TIGER2024/COUNTY/)
 
-## Data cleaning
+## Embeddings
 
-add primary key
+Add the data to GEE assets
 
-google earth engine step
+Run precinct_20_emb.js and precinct_24_emb.js
+
+download the csv from drive and add it to relevant data folder as
+raw_emb_precinct_20/24.csv
+
+then clean_20/24_precinct_emb.R
+
+## Models
+
+Model 1 results: — first pass random forest with 500 trees, 5-fold
+validation
+
+1.  precinct20_m1
+2.  precinct24_m1
+3.  county20_m1
+4.  county24_m1
+5.  county_change_m1
 
 # Satellite Embeddings Vote Share Prediction
 
