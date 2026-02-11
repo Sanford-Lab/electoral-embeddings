@@ -90,6 +90,9 @@ full_results <- bind_rows(all_predictions) %>%
     Abs_Error = abs(Error)
   )
 
+# save results
+write_csv(full_results, "data/results/precinct20_m1_results.csv")
+
 # ==========================================
 # 4. Overall Performance Metrics
 # ==========================================
@@ -157,8 +160,10 @@ plot2 <- ggplot(decile_stats, aes(x = factor(density_decile), y = R2)) +
 
 print(plot2)
 
-write_csv(full_results, "data/results/precinct20_m1_results.csv")
 ```
+R-Squared:  0.735
+RMSE:       0.1203
+Mean Abs Error: 0.0885
 
 
 ## 5-Fold CV for 2024 (Predicting Trump Share)
@@ -243,9 +248,24 @@ full_results <- bind_rows(all_predictions) %>%
     Abs_Error = abs(Error)
   )
 
+# Save results
+write_csv(full_results, "data/results/precinct24_m1_results.csv")
+```
+
+R-Squared:  0.72
+RMSE:       0.1174
+Mean Abs Error: 0.0867
+
+
+## Results and Visualization
+
+```{r}
 # ==========================================
 # 4. Overall Performance Metrics
 # ==========================================
+
+full_results <- read_csv("data/results/precinct20_m1_results.csv")
+#full_results <- read_csv("data/results/precinct24_m1_results.csv")
 
 # Calculate metrics on the full dataset (all folds combined)
 rss  <- sum(full_results$Error^2)
@@ -254,7 +274,7 @@ r2   <- 1 - (rss / tss)
 rmse <- sqrt(mean(full_results$Error^2))
 
 cat("\n==========================================")
-cat("\nOVERALL PRECINCT CV RESULTS (2024)")
+cat("\nOVERALL PRECINCT CV RESULTS")
 cat("\n==========================================")
 cat("\nR-Squared: ", round(r2, 3))
 cat("\nRMSE:      ", round(rmse, 4))
@@ -272,7 +292,7 @@ plot1 <- ggplot(full_results, aes(x = vote_density, y = Error)) +
   geom_smooth(method = "loess", color = "blue", se = FALSE) +
   scale_x_log10(labels = scales::comma) + 
   labs(
-    title = "Precinct Prediction Error vs. Voter Density (2024, 5-Fold CV)",
+    title = "Precinct Prediction Error vs. Voter Density (5-Fold CV)",
     subtitle = paste0("R² = ", round(r2, 3), " | RMSE = ", round(rmse, 3)),
     x = "Voters per km² (Log Scale)",
     y = "Error (Predicted - Actual)"
@@ -301,7 +321,7 @@ plot2 <- ggplot(decile_stats, aes(x = factor(density_decile), y = R2)) +
   geom_col(fill = "steelblue") +
   geom_text(aes(label = round(R2, 2)), vjust = -0.5) +
   labs(
-    title = "Model Performance by Density Decile (2024 Precincts)",
+    title = "Model Performance by Density Decile (Precincts)",
     subtitle = "Decile 1 = Most Rural, Decile 10 = Most Urban",
     x = "Density Decile",
     y = "R-squared"
@@ -309,8 +329,6 @@ plot2 <- ggplot(decile_stats, aes(x = factor(density_decile), y = R2)) +
   theme_minimal()
 
 print(plot2)
-
-write_csv(full_results, "data/results/precinct24_m1_results.csv")
 
 ```
 
