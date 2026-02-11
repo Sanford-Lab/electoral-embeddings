@@ -88,72 +88,6 @@ full_results <- bind_rows(all_predictions) %>%
     Abs_Error = abs(Error)
   )
 
-# ==========================================
-# 4. Overall Performance Metrics
-# ==========================================
-
-# Calculate metrics on the full dataset (all folds combined)
-rss  <- sum(full_results$Error^2)
-tss  <- sum((full_results$TRUMPSHARE - mean(full_results$TRUMPSHARE))^2)
-r2   <- 1 - (rss / tss)
-rmse <- sqrt(mean(full_results$Error^2))
-
-cat("\n==========================================")
-cat("\nOVERALL 5-FOLD CV RESULTS")
-cat("\n==========================================")
-cat("\nR-Squared: ", round(r2, 3))
-cat("\nRMSE:      ", round(rmse, 4))
-cat("\nMean Abs Error:", round(mean(full_results$Abs_Error), 4))
-cat("\n==========================================\n")
-
-# ==========================================
-# 5. Plot 1: Prediction Error vs. Density
-# ==========================================
-
-plot1 <- ggplot(full_results, aes(x = vote_density, y = Error)) +
-  geom_point(alpha = 0.3, size = 0.8) +
-  geom_hline(yintercept = 0, color = "red", linetype = "dashed") +
-  geom_smooth(method = "loess", color = "blue", se = FALSE) +
-  scale_x_log10(labels = scales::comma) + 
-  labs(
-    title = "Prediction Error vs. Voter Density (5-Fold CV)",
-    subtitle = paste0("R² = ", round(r2, 3), " | RMSE = ", round(rmse, 3)),
-    x = "Voters per km² (Log Scale)",
-    y = "Error (Predicted - Actual)"
-  ) +
-  theme_minimal()
-
-print(plot1)
-
-# ==========================================
-# 6. Plot 2: R-squared per Density Decile
-# ==========================================
-
-decile_stats <- full_results %>%
-  mutate(density_decile = ntile(vote_density, 10)) %>%
-  group_by(density_decile) %>%
-  summarize(
-    avg_density = median(vote_density),
-    n = n(),
-    RSS = sum(Error^2),
-    TSS = sum((TRUMPSHARE - mean(TRUMPSHARE))^2),
-    # Safety check: avoid dividing by zero if TSS is 0
-    R2 = if_else(TSS > 1e-6, 1 - (RSS / TSS), 0)
-  )
-
-plot2 <- ggplot(decile_stats, aes(x = factor(density_decile), y = R2)) +
-  geom_col(fill = "steelblue") +
-  geom_text(aes(label = round(R2, 2)), vjust = -0.5) +
-  labs(
-    title = "Model Performance by Density Decile",
-    subtitle = "Decile 1 = Most Rural, Decile 10 = Most Urban",
-    x = "Density Decile",
-    y = "R-squared"
-  ) +
-  theme_minimal()
-
-print(plot2)
-
 write_csv(full_results, "data/results/county20_m1_results.csv")
 
 ```
@@ -247,9 +181,23 @@ full_results <- bind_rows(all_predictions) %>%
     Abs_Error = abs(Error)
   )
 
+# Save results 
+write_csv(full_results, "data/results/county24_m1_results.csv")
+
+```
+R-Squared:  0.632
+RMSE:       0.1189
+Mean Abs Error: 0.094
+
+### Visualizing results for county models
+
+```{r}
 # ==========================================
 # 4. Overall Performance Metrics
 # ==========================================
+
+#full_results <- read.csv("data/results/county20_m1_results.csv")
+full_results <- read.csv("data/results/county24_m1_results.csv")
 
 # Calculate metrics on the full dataset (all folds combined)
 rss  <- sum(full_results$Error^2)
@@ -313,11 +261,36 @@ plot2 <- ggplot(decile_stats, aes(x = factor(density_decile), y = R2)) +
 
 print(plot2)
 
-write_csv(full_results, "data/results/county24_m1_results.csv")
+# ==========================================
+# 7. Plot 3: Predicted vs. Actual Trump Share
+# ==========================================
+
+plot3 <- ggplot(full_results, aes(x = TRUMPSHARE, y = Predicted_Share)) +
+  # Add points with slight transparency
+  geom_point(alpha = 0.4, size = 1, color = "darkslategrey") +
+  
+  # The 'Perfect Prediction' line (y = x)
+  geom_abline(slope = 1, intercept = 0, color = "red", linetype = "dashed", size = 1) +
+  
+  # Add a trend line to see if the model is biased
+  geom_smooth(method = "lm", color = "blue", se = TRUE) +
+  
+  # Format axes as percentages for readability
+  scale_x_continuous(labels = scales::percent, limits = c(0, 1)) +
+  scale_y_continuous(labels = scales::percent, limits = c(0, 1)) +
+  
+  labs(
+    title = "Actual vs. Predicted Trump Vote Share",
+    subtitle = paste0("County-Level 5-Fold CV | R² = ", round(r2, 3)),
+    x = "Actual Trump Share",
+    y = "Predicted Trump Share",
+    caption = "Red dashed line represents perfect prediction."
+  ) +
+  theme_minimal()
+
+print(plot3)
 ```
-R-Squared:  0.632
-RMSE:       0.1189
-Mean Abs Error: 0.094
+
 
 ```{r}
 
