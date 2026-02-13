@@ -189,6 +189,195 @@ R-Squared:  0.632
 RMSE:       0.1189
 Mean Abs Error: 0.094
 
+## 5-FOLD CV, demographics 2020
+```{r}
+
+library(tidyverse)
+library(ranger)
+
+# ==========================================
+# 1. Load and Clean Data
+# ==========================================
+
+# 2020
+clean_20 <- read_csv("data/prep/counties/master_county_emb_20.csv") 
+
+# Select features and remove rows with missing values
+data_rf <- clean_20 %>%
+  select(
+    county_fips, 
+    vote_density, 
+    TRUMPSHARE = rep_share, 
+    ends_with("_mean"), # Only embedding means
+    pct_less_than_hs, pct_hs_only, pct_some_college, pct_bachelors_plus, # Education
+    unemployment_rate, civilian_labor_force # Labor
+  ) %>%
+  na.omit()
+
+# ==========================================
+# 2. Setup 5-Fold Cross-Validation
+# ==========================================
+
+set.seed(10)
+
+# Create 5 random folds
+# We shuffle the data first, then assign a fold number (1 through 5)
+data_rf <- data_rf %>%
+  mutate(fold_id = sample(rep(1:5, length.out = n())))
+
+# Initialize an empty list to store predictions
+all_predictions <- list()
+
+cat("Starting 5-Fold Cross-Validation on", nrow(data_rf), "counties...\n")
+
+# ==========================================
+# 3. The CV Loop
+# ==========================================
+
+for(k in 1:5) {
+  
+  # A. Split Data
+  train_df <- data_rf %>% filter(fold_id != k)
+  test_df  <- data_rf %>% filter(fold_id == k)
+  
+  # B. Train Model
+  # mtry strategy: Number of predictors / 3 is standard for regression
+  n_features <- ncol(train_df) - 4 # Subtract ID, density, share, fold_id
+  my_mtry    <- floor(n_features / 3)
+  
+  rf_model <- ranger(
+    TRUMPSHARE ~ . - county_fips - vote_density - fold_id, 
+    data       = train_df,
+    num.trees  = 500,
+    mtry       = my_mtry, # Dynamic calculation (approx 21)
+    importance = "impurity",
+    seed       = 42
+  )
+  
+  # C. Predict
+  preds <- predict(rf_model, data = test_df)$predictions
+  
+  # D. Store Results
+  # We add the predictions back to the test dataframe
+  test_df$Predicted_Share <- preds
+  all_predictions[[k]] <- test_df
+  
+  cat("  Fold", k, "complete. Rows predicted:", nrow(test_df), "\n")
+}
+
+# Combine all 5 folds back into one big dataframe
+full_results <- bind_rows(all_predictions) %>%
+  mutate(
+    Error = Predicted_Share - TRUMPSHARE,
+    Abs_Error = abs(Error)
+  )
+
+write_csv(full_results, "data/results/county20_m2_results.csv")
+
+```
+R-Squared:  0.742
+RMSE:       0.0819
+Mean Abs Error: 0.0596
+
+## 5-Fold CV, demographics 2024
+```{r}
+
+
+library(tidyverse)
+library(ranger)
+
+# ==========================================
+# 1. Load and Clean Data
+# ==========================================
+
+# 2024
+clean_24 <- read_csv("data/prep/counties/master_county_emb_24.csv") 
+
+# Select features and remove rows with missing values
+data_rf <- clean_24 %>%
+  select(
+    county_fips, 
+    vote_density, 
+    TRUMPSHARE = rep_share, 
+    ends_with("_mean"), # Only embedding means
+    pct_less_than_hs, pct_hs_only, pct_some_college, pct_bachelors_plus, # Education
+    unemployment_rate, civilian_labor_force # Labor
+  ) %>%
+  na.omit()
+
+# ==========================================
+# 2. Setup 5-Fold Cross-Validation
+# ==========================================
+
+set.seed(10)
+
+# Create 5 random folds
+# We shuffle the data first, then assign a fold number (1 through 5)
+data_rf <- data_rf %>%
+  mutate(fold_id = sample(rep(1:5, length.out = n())))
+
+# Initialize an empty list to store predictions
+all_predictions <- list()
+
+cat("Starting 5-Fold Cross-Validation on", nrow(data_rf), "counties...\n")
+
+# ==========================================
+# 3. The CV Loop
+# ==========================================
+
+for(k in 1:5) {
+  
+  # A. Split Data
+  train_df <- data_rf %>% filter(fold_id != k)
+  test_df  <- data_rf %>% filter(fold_id == k)
+  
+  # B. Train Model
+  # mtry strategy: Number of predictors / 3 is standard for regression
+  n_features <- ncol(train_df) - 4 # Subtract ID, density, share, fold_id
+  my_mtry    <- floor(n_features / 3)
+  
+  rf_model <- ranger(
+    TRUMPSHARE ~ . - county_fips - vote_density - fold_id, 
+    data       = train_df,
+    num.trees  = 500,
+    mtry       = my_mtry, # Dynamic calculation (approx 21)
+    importance = "impurity",
+    seed       = 42
+  )
+  
+  # C. Predict
+  preds <- predict(rf_model, data = test_df)$predictions
+  
+  # D. Store Results
+  # We add the predictions back to the test dataframe
+  test_df$Predicted_Share <- preds
+  all_predictions[[k]] <- test_df
+  
+  cat("  Fold", k, "complete. Rows predicted:", nrow(test_df), "\n")
+}
+
+# Combine all 5 folds back into one big dataframe
+full_results <- bind_rows(all_predictions) %>%
+  mutate(
+    Error = Predicted_Share - TRUMPSHARE,
+    Abs_Error = abs(Error)
+  )
+
+write_csv(full_results, "data/results/county24_m2_results.csv")
+
+```
+R-Squared:  0.669
+RMSE:       0.1127
+Mean Abs Error: 0.0881
+
+
+```{r}
+summary(lm(rep_share ~ pct_less_than_hs + pct_hs_only + pct_some_college + pct_bachelors_plus + unemployment_rate + civilian_labor_force, data = clean_20))
+
+summary(lm(rep_share ~ pct_less_than_hs + pct_hs_only + pct_some_college + pct_bachelors_plus + unemployment_rate + civilian_labor_force, data = clean_24))
+```
+
+
 ### Visualizing results for county models
 
 ```{r}
@@ -197,7 +386,7 @@ Mean Abs Error: 0.094
 # ==========================================
 
 #full_results <- read.csv("data/results/county20_m1_results.csv")
-full_results <- read.csv("data/results/county24_m1_results.csv")
+full_results <- read.csv("data/results/county24_m2_results.csv")
 
 # Calculate metrics on the full dataset (all folds combined)
 rss  <- sum(full_results$Error^2)

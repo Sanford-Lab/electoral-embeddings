@@ -5,11 +5,16 @@ editor: visual
 ---
 
 ```{r}
+test_look <- read.csv("data/prep/counties/master_county_emb_20.csv")
+colnames(test_look)
+```
+
+
+```{r}
 library(tidyr)
 library(dplyr)
 
 edu <- read.csv("data/prep/counties/Education2023.csv")
-head(edu, 20)
 edu_flat <- edu %>%
   pivot_wider(
     # The columns that identify a unique row
@@ -24,8 +29,99 @@ edu_flat <- edu %>%
 
 # Check the result
 head(edu_flat)
+colnames(edu_flat)
+edu_flat[edu_flat$FIPS.Code == 1001, ]
 
+# ==========================================
+# 1. Clean and Transform Education Data
+# ==========================================
 
+edu_clean <- edu_flat %>%
+  # A. Pivot Longer
+  pivot_longer(
+    cols = -c(FIPS.Code, State, Area.name, 
+              contains("Urban"), contains("Continuum")),
+    names_to = "raw_name",
+    values_to = "value"
+  ) %>%
+  
+  # B. Separate Description from Year
+  separate(raw_name, into = c("desc", "year_range"), sep = ",\\s(?=[0-9])") %>%
+  
+  # C. Standardize Variables
+  mutate(
+    # *** CRITICAL FIX: Convert to lowercase to ensure matching works ***
+    desc_clean = str_to_lower(desc),
+    
+    # 1. Determine Type (Count vs Percent)
+    measure_type = if_else(str_detect(desc_clean, "percent"), "pct", "count"),
+    
+    # 2. Standardize Education Level
+    edu_level = case_when(
+      # Bachelor's or 4-Year
+      str_detect(desc_clean, "bachelor|four years") ~ "bachelors_plus",
+      
+      # Some College
+      str_detect(desc_clean, "some college") ~ "some_college",
+      
+      # Less than HS (matches 'less than' OR 'not high school')
+      str_detect(desc_clean, "less than|not high school") ~ "less_than_hs",
+      
+      # High School Only 
+      # (We match this LAST to ensure 'less than high school' is already caught)
+      str_detect(desc_clean, "high school") ~ "hs_only",
+      
+      TRUE ~ "ERROR"
+    ),
+    
+    # 3. Create the final clean column name
+    new_col_name = paste(measure_type, edu_level, sep = "_")
+  ) %>%
+  
+  # D. Filter out Errors before pivoting (Safety Check)
+  filter(new_col_name != "pct_ERROR" & new_col_name != "count_ERROR") %>%
+  
+  # E. Pivot Wider
+  # We select only the columns we need to ensure unique rows
+  select(
+    FIPS.Code, State, Area.name, year_range, 
+    contains("Code"), 
+    new_col_name, value
+  ) %>%
+  pivot_wider(
+    names_from = new_col_name,
+    values_from = value
+  ) %>%
+  
+  # F. Rename Identifiers
+  rename(
+    county_fips = FIPS.Code,
+    state = State,
+    county_name = Area.name
+  )
+
+# ==========================================
+# 2. Validation
+# ==========================================
+
+# Use glimpse to verify we have doubles (<dbl>) instead of lists (<list>)
+glimpse(edu_clean)
+
+# Double check that we have no list columns
+if(any(sapply(edu_clean, is.list))) {
+  warning("STOP! There are still list columns.")
+} else {
+  cat("\nSuccess! All columns are numeric/text as expected.\n")
+}
+
+write_csv(edu_clean, "data/prep/counties/clean_education_timeseries.csv")
+
+test_look <- read.csv("data/prep/counties/clean_county_emb_20.csv")
+test_look
+
+```
+
+```{r}
 emp <- read.csv("data/prep/counties/Unemployment2023.csv")
 head(emp, 20)
 
@@ -41,9 +137,73 @@ emp_flat <- emp %>%
     values_from = Value
   )
 
-# Check the result
-head(emp_flat)
+# ==========================================
+# 1. Clean and Transform Employment Data
+# ==========================================
 
+emp_clean <- emp_flat %>%
+  # A. Pivot Longer
+  # We pivot everything EXCEPT the ID columns and the static 2022/2023 reference columns
+  pivot_longer(
+    cols = -c(FIPS_Code, State, Area_Name, 
+              Median_Household_Income_2022, 
+              Med_HH_Income_Percent_of_State_Total_2022, 
+              Rural_Urban_Continuum_Code_2023, 
+              Urban_Influence_Code_2013, 
+              Metro_2023),
+    
+    # B. Extract Metric and Year
+    # .value = The name of the new column (e.g., "Unemployment_rate")
+    # year   = The year extracted from the suffix
+    names_to = c(".value", "year"),
+    
+    # Regex Explanation:
+    # (.*)    -> Capture everything at the start (The metric name)
+    # _       -> Match the LAST underscore
+    # (\\d{4})-> Capture the 4 digits at the end (The year)
+    names_pattern = "(.*)_(\\d{4})"
+  ) %>%
+  
+  # C. Clean Up Columns
+  rename(
+    county_fips = FIPS_Code,
+    state = State,
+    county_name = Area_Name,
+    
+    # Clean up the metric names to be standard lower_snake_case
+    civilian_labor_force = Civilian_labor_force,
+    employed = Employed,
+    unemployed = Unemployed,
+    unemployment_rate = Unemployment_rate,
+    
+    # Rename static columns for easier joining later
+    median_hh_income_2022 = Median_Household_Income_2022,
+    pct_state_income_2022 = Med_HH_Income_Percent_of_State_Total_2022,
+    ruc_code_2023 = Rural_Urban_Continuum_Code_2023,
+    ui_code_2013 = Urban_Influence_Code_2013,
+    metro_2023 = Metro_2023
+  ) %>%
+  
+  # D. Convert Year to Number (it comes out as character from regex)
+  mutate(year = as.numeric(year)) %>%
+  
+  # E. Reorder for readability
+  select(county_fips, state, county_name, year, 
+         unemployment_rate, unemployed, employed, civilian_labor_force,
+         everything())
+
+# ==========================================
+# 2. Validation
+# ==========================================
+
+glimpse(emp_clean)
+
+# Check that we have the expected years (2000-2023)
+cat("\nYears range:", min(emp_clean$year), "-", max(emp_clean$year), "\n")
+
+```
+
+```{r}
 pop <- read.csv("data/prep/counties/PopulationEstimates.csv")
 head(pop, 20)
 
@@ -59,6 +219,59 @@ pop_flat <- pop %>%
     values_from = Value
   )
 
-# Check the result
-head(pop_flat)
+pop_clean <- pop_flat %>%
+  # A. Pivot Longer
+  # We pivot all columns EXCEPT the identifiers and static codes
+  pivot_longer(
+    cols = -c(FIPStxt, State, Area_Name, 
+              Rural_Urban_Continuum_Code_2013, 
+              Rural_Urban_Continuum_Code_2023, 
+              Urban_Influence_2013, 
+              Economic_typology_2015),
+    
+    # B. Extract Metric and Year
+    # .value = The name of the new column (e.g., "POP_ESTIMATE")
+    # year   = The year extracted from the suffix
+    names_to = c(".value", "year"),
+    
+    # Regex Explanation:
+    # (.*)    -> Capture everything at the start (The metric name)
+    # _       -> Match the LAST underscore
+    # (\\d{4})-> Capture the 4 digits at the end (The year)
+    names_pattern = "(.*)_(\\d{4})"
+  ) %>%
+  
+  # C. Clean Up Columns
+  rename(
+    county_fips = FIPStxt,
+    state = State,
+    county_name = Area_Name,
+    
+    # Rename the static codes for consistency
+    ruc_code_2013 = Rural_Urban_Continuum_Code_2013,
+    ruc_code_2023 = Rural_Urban_Continuum_Code_2023,
+    ui_code_2013 = Urban_Influence_2013,
+    econ_type_2015 = Economic_typology_2015
+  ) %>%
+  
+  # D. Convert Year to Number
+  mutate(year = as.numeric(year)) %>%
+  
+  # E. Standardize Metric Names (Optional but recommended)
+  # This converts "POP_ESTIMATE" -> "pop_estimate" (easier to type)
+  rename_with(tolower, .cols = -c(county_fips, state, county_name)) %>%
+  
+  # F. Organize Columns
+  select(county_fips, state, county_name, year, 
+         pop_estimate, n_pop_chg, births, deaths, 
+         international_mig, domestic_mig, net_mig, 
+         everything())
+
+# ==========================================
+# 2. Validation
+# ==========================================
+
+glimpse(pop_clean)
+head(pop_clean[,c(4, 5, 6, 7, 8, 9, 10, 21, 22, 23, 24, 25)], 50)
 ```
+
