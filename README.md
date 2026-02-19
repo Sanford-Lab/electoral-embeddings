@@ -53,13 +53,19 @@ then clean_20/24_precinct_emb.R
 ## Models
 
 Model 1 results: — first pass random forest with 500 trees, 5-fold
-validation
+validation, using ONLY embeddings as predictors
 
 1.  precinct20_m1
 2.  precinct24_m1
 3.  county20_m1
 4.  county24_m1
 5.  county_change_m1
+
+Model 2 results: — same random forest structure, adding some demographic
+data as
+
+1.  county24_m2
+2.  county20_m2
 
 # Satellite Embeddings Vote Share Prediction
 

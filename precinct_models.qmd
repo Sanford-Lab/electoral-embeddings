@@ -197,8 +197,8 @@ Mean Abs Error: 0.0867
 # 4. Overall Performance Metrics
 # ==========================================
 
-full_results <- read_csv("data/results/precinct20_m1_results.csv")
-#full_results <- read_csv("data/results/precinct24_m1_results.csv")
+#full_results <- read_csv("data/results/precinct20_m1_results.csv")
+full_results <- read_csv("data/results/precinct24_m1_results.csv")
 
 # Calculate metrics on the full dataset (all folds combined)
 rss  <- sum(full_results$Error^2)
