@@ -6,6 +6,7 @@ library(readr)
 # ============================================================
 
 # Load Embeddings
+emb16 <- read.csv("data/prep/counties/raw_county_emb_16_17.csv")
 emb20 <- read.csv("data/prep/counties/raw_county_emb_20.csv")
 emb24 <- read.csv("data/prep/counties/raw_county_emb_24.csv")
 
@@ -66,6 +67,10 @@ process_year <- function(emb_df, votes_df, target_year) {
 # 3. Process Both Years
 # ============================================================
 
+# Run 2016
+clean_16 <- process_year(emb16, votes, 2016)
+cat("2016 Rows:", nrow(clean_16), "\n")
+
 # Run 2020
 clean_20 <- process_year(emb20, votes, 2020)
 cat("2020 Rows:", nrow(clean_20), "\n")
@@ -78,6 +83,7 @@ cat("2024 Rows:", nrow(clean_24), "\n")
 # 4. Save Outputs
 # ============================================================
 
+write_csv(clean_16, "data/prep/counties/clean_county_emb_16_17.csv")
 write_csv(clean_20, "data/prep/counties/clean_county_emb_20.csv")
 write_csv(clean_24, "data/prep/counties/clean_county_emb_24.csv")
 

@@ -4,6 +4,92 @@ format: html
 editor: visual
 ---
 
+## 5-Fold CV for 2016 (Predicting Trump Share)
+
+```{r}
+
+library(tidyverse)
+library(ranger)
+
+# ==========================================
+# 1. Load and Clean Data
+# ==========================================
+
+# 2016
+clean_16 <- read_csv("data/prep/counties/clean_county_emb_16_17.csv") 
+
+# Select features and remove rows with missing values
+data_rf <- clean_16 %>%
+  select(
+    county_fips, 
+    vote_density, 
+    TRUMPSHARE = rep_share, 
+    ends_with("_mean") # Only embedding means
+  ) %>%
+  na.omit()
+
+# ==========================================
+# 2. Setup 5-Fold Cross-Validation
+# ==========================================
+
+set.seed(10)
+
+# Create 5 random folds
+# We shuffle the data first, then assign a fold number (1 through 5)
+data_rf <- data_rf %>%
+  mutate(fold_id = sample(rep(1:5, length.out = n())))
+
+# Initialize an empty list to store predictions
+all_predictions <- list()
+
+cat("Starting 5-Fold Cross-Validation on", nrow(data_rf), "counties...\n")
+
+# ==========================================
+# 3. The CV Loop
+# ==========================================
+
+for(k in 1:5) {
+  
+  # A. Split Data
+  train_df <- data_rf %>% filter(fold_id != k)
+  test_df  <- data_rf %>% filter(fold_id == k)
+  
+  # B. Train Model
+  # mtry strategy: Number of predictors / 3 is standard for regression
+  n_features <- ncol(train_df) - 4 # Subtract ID, density, share, fold_id
+  my_mtry    <- floor(n_features / 3)
+  
+  rf_model <- ranger(
+    TRUMPSHARE ~ . - county_fips - vote_density - fold_id, 
+    data       = train_df,
+    num.trees  = 500,
+    mtry       = my_mtry, # Dynamic calculation (approx 21)
+    importance = "impurity",
+    seed       = 42
+  )
+  
+  # C. Predict
+  preds <- predict(rf_model, data = test_df)$predictions
+  
+  # D. Store Results
+  # We add the predictions back to the test dataframe
+  test_df$Predicted_Share <- preds
+  all_predictions[[k]] <- test_df
+  
+  cat("  Fold", k, "complete. Rows predicted:", nrow(test_df), "\n")
+}
+
+# Combine all 5 folds back into one big dataframe
+full_results <- bind_rows(all_predictions) %>%
+  mutate(
+    Error = Predicted_Share - TRUMPSHARE,
+    Abs_Error = abs(Error)
+  )
+
+write_csv(full_results, "data/results/county16_m1_results.csv")
+
+```
+
 ## 5-Fold CV for 2020 (Predicting Trump Share)
 
 This script takes ~20 sec to run
@@ -386,7 +472,7 @@ summary(lm(rep_share ~ pct_less_than_hs + pct_hs_only + pct_some_college + pct_b
 # ==========================================
 
 #full_results <- read.csv("data/results/county20_m1_results.csv")
-full_results <- read.csv("data/results/county24_m2_results.csv")
+full_results <- read.csv("data/results/county16_m1_results.csv")
 
 # Calculate metrics on the full dataset (all folds combined)
 rss  <- sum(full_results$Error^2)
@@ -670,6 +756,433 @@ print(p3)
 
 write_csv(results, "data/results/county_change_m1_results.csv")
 
+
 ```
 R-Squared:  0.598
 RMSE:       0.0845 ( 8.45 percentage points )
+
+
+
+```{r}
+
+
+library(tidyverse)
+library(ranger)
+
+# ==========================================
+# 1. Load and Clean Data
+# ==========================================
+
+# 2020
+clean_20 <- read_csv("data/prep/counties/master_county_emb_20.csv") 
+
+# Select features and remove rows with missing values
+data_rf <- clean_20 %>%
+  select(
+    county_fips, 
+    vote_density, 
+    TRUMPSHARE = rep_share, 
+    #ends_with("_mean"), # Only embedding means
+    pct_less_than_hs, pct_hs_only, pct_some_college, pct_bachelors_plus, # Education
+    unemployment_rate, civilian_labor_force # Labor
+  ) %>%
+  na.omit()
+
+# ==========================================
+# 2. Setup 5-Fold Cross-Validation
+# ==========================================
+
+set.seed(10)
+
+# Create 5 random folds
+# We shuffle the data first, then assign a fold number (1 through 5)
+data_rf <- data_rf %>%
+  mutate(fold_id = sample(rep(1:5, length.out = n())))
+
+# Initialize an empty list to store predictions
+all_predictions <- list()
+
+cat("Starting 5-Fold Cross-Validation on", nrow(data_rf), "counties...\n")
+
+# ==========================================
+# 3. The CV Loop
+# ==========================================
+
+for(k in 1:5) {
+  
+  # A. Split Data
+  train_df <- data_rf %>% filter(fold_id != k)
+  test_df  <- data_rf %>% filter(fold_id == k)
+  
+  # B. Train Model
+  # mtry strategy: Number of predictors / 3 is standard for regression
+  n_features <- ncol(train_df) - 4 # Subtract ID, density, share, fold_id
+  my_mtry    <- floor(n_features / 3)
+  
+  rf_model <- ranger(
+    TRUMPSHARE ~ . - county_fips - fold_id, 
+    data       = train_df,
+    num.trees  = 500,
+    mtry       = my_mtry, # Dynamic calculation (approx 21)
+    importance = "impurity",
+    seed       = 42
+  )
+  
+  # C. Predict
+  preds <- predict(rf_model, data = test_df)$predictions
+  
+  # D. Store Results
+  # We add the predictions back to the test dataframe
+  test_df$Predicted_Share <- preds
+  all_predictions[[k]] <- test_df
+  
+  cat("  Fold", k, "complete. Rows predicted:", nrow(test_df), "\n")
+}
+
+# Combine all 5 folds back into one big dataframe
+full_results <- bind_rows(all_predictions) %>%
+  mutate(
+    Error = Predicted_Share - TRUMPSHARE,
+    Abs_Error = abs(Error)
+  )
+
+# ==========================================
+# 4. Overall Performance Metrics
+# ==========================================
+
+#full_results <- read.csv("data/results/county20_m1_results.csv")
+#full_results <- read.csv("data/results/county24_m2_results.csv")
+
+# Calculate metrics on the full dataset (all folds combined)
+rss  <- sum(full_results$Error^2)
+tss  <- sum((full_results$TRUMPSHARE - mean(full_results$TRUMPSHARE))^2)
+r2   <- 1 - (rss / tss)
+rmse <- sqrt(mean(full_results$Error^2))
+
+cat("\n==========================================")
+cat("\nOVERALL 5-FOLD CV RESULTS")
+cat("\n==========================================")
+cat("\nR-Squared: ", round(r2, 3))
+cat("\nRMSE:      ", round(rmse, 4))
+cat("\nMean Abs Error:", round(mean(full_results$Abs_Error), 4))
+cat("\n==========================================\n")
+
+# ==========================================
+# 5. Plot 1: Prediction Error vs. Density
+# ==========================================
+
+plot1 <- ggplot(full_results, aes(x = vote_density, y = Error)) +
+  geom_point(alpha = 0.3, size = 0.8) +
+  geom_hline(yintercept = 0, color = "red", linetype = "dashed") +
+  geom_smooth(method = "loess", color = "blue", se = FALSE) +
+  scale_x_log10(labels = scales::comma) + 
+  labs(
+    title = "Prediction Error vs. Voter Density (5-Fold CV)",
+    subtitle = paste0("R² = ", round(r2, 3), " | RMSE = ", round(rmse, 3)),
+    x = "Voters per km² (Log Scale)",
+    y = "Error (Predicted - Actual)"
+  ) +
+  theme_minimal()
+
+print(plot1)
+
+# ==========================================
+# 6. Plot 2: R-squared per Density Decile
+# ==========================================
+
+decile_stats <- full_results %>%
+  mutate(density_decile = ntile(vote_density, 10)) %>%
+  group_by(density_decile) %>%
+  summarize(
+    avg_density = median(vote_density),
+    n = n(),
+    RSS = sum(Error^2),
+    TSS = sum((TRUMPSHARE - mean(TRUMPSHARE))^2),
+    # Safety check: avoid dividing by zero if TSS is 0
+    R2 = if_else(TSS > 1e-6, 1 - (RSS / TSS), 0)
+  )
+
+plot2 <- ggplot(decile_stats, aes(x = factor(density_decile), y = R2)) +
+  geom_col(fill = "steelblue") +
+  geom_text(aes(label = round(R2, 2)), vjust = -0.5) +
+  labs(
+    title = "Model Performance by Density Decile",
+    subtitle = "Decile 1 = Most Rural, Decile 10 = Most Urban",
+    x = "Density Decile",
+    y = "R-squared"
+  ) +
+  theme_minimal()
+
+print(plot2)
+
+# ==========================================
+# 7. Plot 3: Predicted vs. Actual Trump Share
+# ==========================================
+
+plot3 <- ggplot(full_results, aes(x = TRUMPSHARE, y = Predicted_Share)) +
+  # Add points with slight transparency
+  geom_point(alpha = 0.4, size = 1, color = "darkslategrey") +
+  
+  # The 'Perfect Prediction' line (y = x)
+  geom_abline(slope = 1, intercept = 0, color = "red", linetype = "dashed", size = 1) +
+  
+  # Add a trend line to see if the model is biased
+  geom_smooth(method = "lm", color = "blue", se = TRUE) +
+  
+  # Format axes as percentages for readability
+  scale_x_continuous(labels = scales::percent, limits = c(0, 1)) +
+  scale_y_continuous(labels = scales::percent, limits = c(0, 1)) +
+  
+  labs(
+    title = "Actual vs. Predicted Trump Vote Share",
+    subtitle = paste0("County-Level 5-Fold CV | R² = ", round(r2, 3)),
+    x = "Actual Trump Share",
+    y = "Predicted Trump Share",
+    caption = "Red dashed line represents perfect prediction."
+  ) +
+  theme_minimal()
+
+print(plot3)
+
+```
+
+```{r}
+library(tidyverse)
+library(ranger)
+
+# ==============================================================================
+# GOAL:
+#   Train on 2016 -> 2020 shifts (using 2020 embeddings as predictors),
+#   then predict 2020 -> 2024 shifts (using 2024 embeddings as predictors),
+#   WITHOUT training on 2020 -> 2024.
+# ==============================================================================
+
+
+# ==========================================
+# 1. Load & Join Data for TRAIN (2016 vs 2020)
+# ==========================================
+
+df_16 <- read_csv("data/prep/counties/clean_county_emb_16_17.csv") %>%
+  select(county_fips, rep_share_16 = rep_share)
+
+df_20 <- read_csv("data/prep/counties/clean_county_emb_20.csv") %>%
+  rename(rep_share_20 = rep_share)
+
+# TRAIN set: 2016 -> 2020 shift, predictors = 2020 embeddings
+train_shift <- inner_join(df_16, df_20, by = "county_fips") %>%
+  mutate(
+    SHIFT_16_20 = rep_share_20 - rep_share_16
+  ) %>%
+  select(
+    county_fips,
+    county_name,
+    state_po,
+    vote_density,
+    rep_share_16,
+    rep_share_20,      # kept for analysis, not used for training
+    SHIFT_16_20,       # target for training
+    ends_with("_mean") # predictors = 2020 embeddings
+  ) %>%
+  na.omit()
+
+cat("TRAIN data loaded (2016->2020) for", nrow(train_shift), "counties.\n")
+cat("Avg TRAIN shift:", round(mean(train_shift$SHIFT_16_20) * 100, 2), "points\n")
+
+
+# ==========================================
+# 2. Load & Join Data for TEST (2020 vs 2024)
+# ==========================================
+
+df_20_base <- read_csv("data/prep/counties/clean_county_emb_20.csv") %>%
+  select(county_fips, rep_share_20 = rep_share)
+
+df_24 <- read_csv("data/prep/counties/clean_county_emb_24.csv") %>%
+  rename(rep_share_24 = rep_share)
+
+# TEST set: 2020 -> 2024 shift, predictors = 2024 embeddings
+test_shift <- inner_join(df_20_base, df_24, by = "county_fips") %>%
+  mutate(
+    SHIFT_20_24 = rep_share_24 - rep_share_20
+  ) %>%
+  select(
+    county_fips,
+    county_name,
+    state_po,
+    vote_density,
+    rep_share_20,      # kept for analysis, not used for training
+    SHIFT_20_24,       # target only for evaluation
+    ends_with("_mean") # predictors = 2024 embeddings
+  ) %>%
+  na.omit()
+
+cat("\nTEST data loaded (2020->2024) for", nrow(test_shift), "counties.\n")
+cat("Avg TEST shift:", round(mean(test_shift$SHIFT_20_24) * 100, 2), "points\n")
+
+
+# ==========================================
+# 3. Make sure TRAIN and TEST have identical predictor columns
+# ==========================================
+
+id_cols_train <- c("county_fips", "county_name", "state_po", "vote_density", "rep_share_16", "rep_share_20", "SHIFT_16_20")
+id_cols_test  <- c("county_fips", "county_name", "state_po", "vote_density", "rep_share_20", "SHIFT_20_24")
+
+x_cols_train <- setdiff(names(train_shift), id_cols_train)
+x_cols_test  <- setdiff(names(test_shift),  id_cols_test)
+
+common_x <- intersect(x_cols_train, x_cols_test)
+
+# Keep only the shared predictors (safe if columns differ across years)
+train_shift <- train_shift %>% select(all_of(id_cols_train), all_of(common_x))
+test_shift  <- test_shift  %>% select(all_of(id_cols_test),  all_of(common_x))
+
+cat("\nUsing", length(common_x), "shared embedding predictors.\n")
+
+
+# ==========================================
+# 4. 5-Fold CV ON TRAIN (2016->2020), predict TEST (2020->2024)
+# ==========================================
+
+set.seed(55)
+train_shift <- train_shift %>%
+  mutate(fold_id = sample(rep(1:5, length.out = n())))
+
+test_preds_by_fold <- list()
+importances <- list()
+
+cat("\nStarting CV: train on 2016->2020, predict 2020->2024...\n")
+
+for (k in 1:5) {
+
+  # A. Train split
+  train_df <- train_shift %>% filter(fold_id != k)
+
+  # B. Fit model on 2016->2020 shift
+  rf_model <- ranger(
+    SHIFT_16_20 ~ . - county_fips - county_name - state_po - vote_density - rep_share_16 - rep_share_20 - fold_id,
+    data       = train_df,
+    num.trees  = 500,
+    mtry       = 21,           # keep your setting; tweak if you want
+    importance = "impurity",
+    seed       = 42
+  )
+
+  # C. Predict 2020->2024 shifts for ALL test counties using this fold's model
+  preds <- predict(rf_model, data = test_shift)$predictions
+
+  tmp <- test_shift %>%
+    mutate(
+      fold_model = k,
+      Predicted_Shift = preds
+    )
+
+  test_preds_by_fold[[k]] <- tmp
+  importances[[k]] <- rf_model$variable.importance
+
+  cat("  Fold", k, "model trained (on 2016->2020) and applied to 2020->2024.\n")
+}
+
+# Average predictions across the 5 independently-trained models
+results <- bind_rows(test_preds_by_fold) %>%
+  group_by(county_fips, county_name, state_po, vote_density, rep_share_20, SHIFT_20_24) %>%
+  summarise(
+    Predicted_Shift = mean(Predicted_Shift),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    Error = Predicted_Shift - SHIFT_20_24,
+    Abs_Error = abs(Error)
+  )
+
+
+# ==========================================
+# 5. Metrics (evaluated on 2020->2024)
+# ==========================================
+
+rss  <- sum(results$Error^2)
+tss  <- sum((results$SHIFT_20_24 - mean(results$SHIFT_20_24))^2)
+r2   <- 1 - (rss / tss)
+rmse <- sqrt(mean(results$Error^2))
+
+cat("\n==========================================")
+cat("\nTRANSFER MODEL RESULTS")
+cat("\nTrain: 2016->2020 | Test: 2020->2024")
+cat("\n==========================================")
+cat("\nR-Squared: ", round(r2, 3))
+cat("\nRMSE:      ", round(rmse, 4), "(", round(rmse*100, 2), "percentage points )")
+cat("\n==========================================\n")
+
+
+# ==========================================
+# 6. Visualization 1: Actual vs. Predicted Shift
+# ==========================================
+
+p1 <- ggplot(results, aes(x = SHIFT_20_24, y = Predicted_Shift)) +
+  geom_point(alpha = 0.3, size = 1, color = "purple") +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +
+  geom_smooth(method = "lm", color = "orange", se = FALSE) +
+  labs(
+    title = "Out-of-period generalization: 2016→2020 trained, 2020→2024 predicted",
+    subtitle = paste0("R² = ", round(r2, 3), " | RMSE = ", round(rmse, 4)),
+    x = "Actual Shift (2020 → 2024)",
+    y = "Predicted Shift (trained on 2016 → 2020)"
+  ) +
+  scale_x_continuous(labels = scales::percent) +
+  scale_y_continuous(labels = scales::percent) +
+  theme_minimal()
+
+print(p1)
+
+
+# ==========================================
+# 7. Visualization 2: Error Bias by Baseline Partisanship
+# ==========================================
+
+p2 <- ggplot(results, aes(x = rep_share_20, y = Error)) +
+  geom_hline(yintercept = 0, color = "red", linetype = "dashed") +
+  geom_point(alpha = 0.4, size = 0.8) +
+  geom_smooth(method = "loess", color = "blue", fill = "gray90") +
+  labs(
+    title = "Where were the surprises (transfer model)?",
+    subtitle = "Positive Error = model expected a more pro-GOP shift than happened",
+    x = "2020 GOP Vote Share (Baseline)",
+    y = "Prediction Error (Pred - Actual)"
+  ) +
+  scale_x_continuous(labels = scales::percent) +
+  theme_minimal()
+
+print(p2)
+
+
+# ==========================================
+# 8. Visualization 3: Top Predictive Features (avg across folds)
+# ==========================================
+
+avg_imp <- bind_rows(lapply(importances, function(x) as.data.frame(t(x)))) %>%
+  summarise(across(everything(), mean)) %>%
+  pivot_longer(everything(), names_to = "Feature", values_to = "Importance") %>%
+  arrange(desc(Importance)) %>%
+  slice(1:15)
+
+p3 <- ggplot(avg_imp, aes(x = reorder(Feature, Importance), y = Importance)) +
+  geom_col(fill = "darkcyan") +
+  coord_flip() +
+  labs(
+    title = "Which embeddings predict swings (learned from 2016→2020)?",
+    subtitle = "Top 15 features by impurity importance (avg across folds)",
+    x = "",
+    y = "Variable Importance (Impurity)"
+  ) +
+  theme_minimal()
+
+print(p3)
+
+
+# ==========================================
+# 9. Save
+# ==========================================
+
+write_csv(results, "data/results/county_change_m2_results.csv")
+cat("Saved")
+
+```
+
