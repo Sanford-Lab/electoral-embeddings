@@ -11,45 +11,52 @@ emb20 <- read.csv("data/prep/counties/raw_county_emb_20.csv")
 emb24 <- read.csv("data/prep/counties/raw_county_emb_24.csv")
 
 # Load Votes
-votes <- read.csv("data/prep/counties/clean_county_votes_00-24.csv")
+votes <- read_csv("data/prep/counties/clean_county_votes_00-24.csv", show_col_types = FALSE)
 
 # ============================================================
 # 2. Define Helper Function
 # ============================================================
 
-# Since we do the exact same logic for 2020 and 2024, let's write a function
 process_year <- function(emb_df, votes_df, target_year) {
   
-  # A. Filter votes to the specific year
   votes_year <- votes_df %>%
-    filter(year == target_year)
+    filter(year == target_year) %>%
+    mutate(
+      county_fips = as.character(county_fips),
+      county_fips5 = str_pad(county_fips, width = 5, side = "left", pad = "0")
+    )
   
-  # B. Prepare Embeddings
-  #    - Select relevant columns (GEOID, Name, Area, and Embeddings A*)
-  #    - Ensure GEOID is numeric for joining (sometimes CSV reads as char)
   emb_prep <- emb_df %>%
     select(GEOID, NAMELSAD, county_area, matches("^A\\d")) %>%
-    mutate(GEOID = as.numeric(GEOID))
+    mutate(
+      GEOID = as.character(GEOID),
+      # handle cases like "1001", "01001", or "01001.0"
+      GEOID = sub("\\.0$", "", GEOID),
+      county_fips5 = str_pad(GEOID, width = 5, side = "left", pad = "0")
+    ) %>%
+    distinct(county_fips5, .keep_all = TRUE)
   
-  # C. Join
-  #    - We use inner_join to keep only counties that have BOTH embeddings and votes
-  merged <- inner_join(emb_prep, votes_year, by = c("GEOID" = "county_fips"))
+  cat("\nYear", target_year, ":\n")
+  cat("  Emb counties:", n_distinct(emb_prep$county_fips5), "\n")
+  cat("  Vote counties:", n_distinct(votes_year$county_fips5), "\n")
   
-  # D. Final Clean & Calculate
+  merged <- inner_join(
+    emb_prep,
+    votes_year,
+    by = "county_fips5"
+  )
+  
+  cat("  Joined counties:", n_distinct(merged$county_fips5), "\n")
+  
   final_df <- merged %>%
     mutate(
-      # Create area in km^2
-      area_km2 = county_area / 1000000,
-      
-      # Calculate Vote Density (Votes per km^2)
-      # Safety check for 0 area to avoid Inf
+      area_km2 = county_area / 1e6,
       vote_density = if_else(area_km2 > 0, total_votes / area_km2, 0)
     ) %>%
-    # Reorder columns to your desired schema
     select(
-      county_fips = GEOID,
-      county_name,        # from votes file
-      state_po,           # from votes file
+      county_fips = county_fips5,   # keep standardized 5-digit FIPS
+      county_name,
+      state_po,
       votes_dem,
       votes_rep,
       total_votes,
@@ -57,27 +64,24 @@ process_year <- function(emb_df, votes_df, target_year) {
       dem_share,
       area_km2,
       vote_density,
-      starts_with("A")    # All embedding columns
+      starts_with("A")
     )
   
-  return(final_df)
+  final_df
 }
 
 # ============================================================
-# 3. Process Both Years
+# 3. Process Years
 # ============================================================
 
-# Run 2016
 clean_16 <- process_year(emb16, votes, 2016)
-cat("2016 Rows:", nrow(clean_16), "\n")
+cat("\n2016 Rows:", nrow(clean_16), "\n")
 
-# Run 2020
 clean_20 <- process_year(emb20, votes, 2020)
-cat("2020 Rows:", nrow(clean_20), "\n")
+cat("\n2020 Rows:", nrow(clean_20), "\n")
 
-# Run 2024
 clean_24 <- process_year(emb24, votes, 2024)
-cat("2024 Rows:", nrow(clean_24), "\n")
+cat("\n2024 Rows:", nrow(clean_24), "\n")
 
 # ============================================================
 # 4. Save Outputs
@@ -87,4 +91,4 @@ write_csv(clean_16, "data/prep/counties/clean_county_emb_16_17.csv")
 write_csv(clean_20, "data/prep/counties/clean_county_emb_20.csv")
 write_csv(clean_24, "data/prep/counties/clean_county_emb_24.csv")
 
-cat("Done! Files saved to data/prep/counties/")
+cat("\nDone! Files saved to data/prep/counties/\n")

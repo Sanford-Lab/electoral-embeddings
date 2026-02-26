@@ -472,7 +472,7 @@ summary(lm(rep_share ~ pct_less_than_hs + pct_hs_only + pct_some_college + pct_b
 # ==========================================
 
 #full_results <- read.csv("data/results/county20_m1_results.csv")
-full_results <- read.csv("data/results/county16_m1_results.csv")
+full_results <- read.csv("data/results/county24_m2_results.csv")
 
 # Calculate metrics on the full dataset (all folds combined)
 rss  <- sum(full_results$Error^2)
@@ -617,6 +617,27 @@ cat("Data Loaded. Analyzing shift for", nrow(data_shift), "counties.\n")
 cat("Average Shift:", round(mean(data_shift$SHIFT_20_24) * 100, 2), "points\n")
 
 # ==========================================
+# OPTIONAL: Remove extreme shift outliers (|SHIFT_20_24| > 0.15)
+#   - Drop-in section (easy to comment out)
+#   - Put this RIGHT AFTER you create `data_shift` and `na.omit()`
+# ==========================================
+
+outlier_cutoff <- 0.15
+
+cat("\n[Outlier filter] Before:", nrow(data_shift), "counties\n")
+
+data_shift <- data_shift %>%
+  filter(abs(SHIFT_20_24) <= outlier_cutoff)
+
+cat("[Outlier filter] After: ", nrow(data_shift), "counties\n")
+cat("[Outlier filter] Removed:", sum(abs(data_shift$SHIFT_20_24) > outlier_cutoff), "(should be 0 after filter)\n")
+
+# Optional quick summary of remaining shift range
+cat("[Outlier filter] Shift range now:",
+    round(min(data_shift$SHIFT_20_24), 4), "to",
+    round(max(data_shift$SHIFT_20_24), 4), "\n")
+
+# ==========================================
 # 2. Setup 5-Fold Cross-Validation
 # ==========================================
 
@@ -754,14 +775,56 @@ p3 <- ggplot(avg_imp, aes(x = reorder(Feature, Importance), y = Importance)) +
 
 print(p3)
 
+# ==========================================
+# 8. Visualization 4: R² by Vote Density Decile
+# ==========================================
+
+# Helper to compute R² safely (returns NA if variance is zero)
+r2_fun <- function(actual, pred) {
+  rss <- sum((pred - actual)^2, na.rm = TRUE)
+  tss <- sum((actual - mean(actual, na.rm = TRUE))^2, na.rm = TRUE)
+  if (is.na(tss) || tss == 0) return(NA_real_)
+  1 - rss / tss
+}
+
+# Create density deciles + compute per-decile metrics
+r2_by_decile <- results %>%
+  mutate(
+    density_decile = ntile(vote_density, 10)
+  ) %>%
+  group_by(density_decile) %>%
+  summarise(
+    n = n(),
+    r2 = r2_fun(SHIFT_20_24, Predicted_Shift),
+    rmse = sqrt(mean((Predicted_Shift - SHIFT_20_24)^2, na.rm = TRUE)),
+    density_min = min(vote_density, na.rm = TRUE),
+    density_max = max(vote_density, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+print(r2_by_decile)
+
+# Bar plot of R² by decile
+p4 <- ggplot(r2_by_decile, aes(x = factor(density_decile), y = r2)) +
+  geom_col() +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(
+    title = "Model Performance by Vote Density",
+    subtitle = "Out-of-sample R² computed within each vote_density decile",
+    x = "Vote Density Decile (1 = lowest density, 10 = highest)",
+    y = "R² (within decile)"
+  ) +
+  theme_minimal()
+
+print(p4)
+
 write_csv(results, "data/results/county_change_m1_results.csv")
 
 
 ```
-R-Squared:  0.598
-RMSE:       0.0845 ( 8.45 percentage points )
 
 
+## Predicting only with the demographics
 
 ```{r}
 
@@ -946,6 +1009,8 @@ print(plot3)
 
 ```
 
+train on 2016 -> 2020, then predict 2020 -> 2024 shifts, WITHOUT training on 2020 -> 2024.
+
 ```{r}
 library(tidyverse)
 library(ranger)
@@ -1017,6 +1082,38 @@ test_shift <- inner_join(df_20_base, df_24, by = "county_fips") %>%
 
 cat("\nTEST data loaded (2020->2024) for", nrow(test_shift), "counties.\n")
 cat("Avg TEST shift:", round(mean(test_shift$SHIFT_20_24) * 100, 2), "points\n")
+
+# ==========================================
+# OPTIONAL: Remove extreme shift outliers (|SHIFT| > 0.15)
+#   Drop this RIGHT AFTER you create train_shift and test_shift (after na.omit()).
+#   Easy to comment out as a block.
+# ==========================================
+
+outlier_cutoff <- 0.15
+
+# --- TRAIN outliers (2016 -> 2020) ---
+n_train_before <- nrow(train_shift)
+train_shift <- train_shift %>% filter(abs(SHIFT_16_20) <= outlier_cutoff)
+n_train_after <- nrow(train_shift)
+
+cat("\n[Outlier filter | TRAIN] Before:", n_train_before,
+    "| After:", n_train_after,
+    "| Removed:", (n_train_before - n_train_after), "\n")
+cat("[Outlier filter | TRAIN] Shift range now:",
+    round(min(train_shift$SHIFT_16_20), 4), "to",
+    round(max(train_shift$SHIFT_16_20), 4), "\n")
+
+# --- TEST outliers (2020 -> 2024) ---
+n_test_before <- nrow(test_shift)
+test_shift <- test_shift %>% filter(abs(SHIFT_20_24) <= outlier_cutoff)
+n_test_after <- nrow(test_shift)
+
+cat("\n[Outlier filter | TEST]  Before:", n_test_before,
+    "| After:", n_test_after,
+    "| Removed:", (n_test_before - n_test_after), "\n")
+cat("[Outlier filter | TEST]  Shift range now:",
+    round(min(test_shift$SHIFT_20_24), 4), "to",
+    round(max(test_shift$SHIFT_20_24), 4), "\n")
 
 
 # ==========================================
@@ -1178,11 +1275,898 @@ print(p3)
 
 
 # ==========================================
+# 9. Visualization 4: R² by Vote Density Decile (TRANSFER MODEL)
+#   Drop this right after p3 (and before write_csv).
+# ==========================================
+
+# Helper to compute R² safely (returns NA if variance is zero)
+r2_fun <- function(actual, pred) {
+  rss <- sum((pred - actual)^2, na.rm = TRUE)
+  tss <- sum((actual - mean(actual, na.rm = TRUE))^2, na.rm = TRUE)
+  if (is.na(tss) || tss == 0) return(NA_real_)
+  1 - rss / tss
+}
+
+r2_by_density_decile <- results %>%
+  mutate(
+    density_decile = ntile(vote_density, 10)
+    # If density is super skewed, you may prefer:
+    # density_decile = ntile(log1p(vote_density), 10)
+  ) %>%
+  group_by(density_decile) %>%
+  summarise(
+    n = n(),
+    r2 = r2_fun(SHIFT_20_24, Predicted_Shift),
+    rmse = sqrt(mean((Predicted_Shift - SHIFT_20_24)^2, na.rm = TRUE)),
+    density_min = min(vote_density, na.rm = TRUE),
+    density_max = max(vote_density, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+print(r2_by_density_decile)
+
+p4 <- ggplot(r2_by_density_decile, aes(x = factor(density_decile), y = r2)) +
+  geom_col() +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(
+    title = "Transfer-model performance by vote density",
+    subtitle = "R² computed within each vote_density decile (test period: 2020→2024)",
+    x = "Vote Density Decile (1 = lowest density, 10 = highest)",
+    y = "R² (within decile)"
+  ) +
+  theme_minimal()
+
+print(p4)
+
+# ==========================================
 # 9. Save
 # ==========================================
 
 write_csv(results, "data/results/county_change_m2_results.csv")
 cat("Saved")
 
+
+
+```
+
+
+```{r}
+library(tidyverse)
+library(ranger)
+
+# ==============================================================================
+# GOAL (EARLY-YEAR EMBEDDINGS):
+#   Train on 2016 -> 2020 shifts using **2016 embeddings** as predictors,
+#   then predict 2020 -> 2024 shifts using **2020 embeddings** as predictors,
+#   WITHOUT training on 2020 -> 2024.
+# ==============================================================================
+
+
+# ==========================================
+# 1. Load Data
+# ==========================================
+
+# Full files (keep embeddings/metadata)
+df_16_full <- read_csv("data/prep/counties/clean_county_emb_16_17.csv")
+df_20_full <- read_csv("data/prep/counties/clean_county_emb_20.csv")
+df_24_full <- read_csv("data/prep/counties/clean_county_emb_24.csv")
+
+# Shares-only extracts (to avoid duplicate cols in joins)
+df_16_share <- df_16_full %>% select(county_fips, rep_share_16 = rep_share)
+df_20_share <- df_20_full %>% select(county_fips, rep_share_20 = rep_share)
+df_24_share <- df_24_full %>% select(county_fips, rep_share_24 = rep_share)
+
+
+# ==========================================
+# 2. TRAIN: 2016 -> 2020 shift, predictors = 2016 embeddings
+# ==========================================
+
+train_shift <- inner_join(df_16_share, df_20_share, by = "county_fips") %>%
+  # attach 2016 embeddings + metadata we want to keep
+  inner_join(
+    df_16_full %>%
+      select(county_fips, county_name, state_po, vote_density, ends_with("_mean")),
+    by = "county_fips"
+  ) %>%
+  mutate(
+    SHIFT_16_20 = rep_share_20 - rep_share_16
+  ) %>%
+  select(
+    county_fips,
+    county_name,
+    state_po,
+    vote_density,
+    rep_share_16,
+    rep_share_20,      # kept for analysis, not used for training
+    SHIFT_16_20,       # target for training
+    ends_with("_mean") # predictors = 2016 embeddings
+  ) %>%
+  na.omit()
+
+cat("TRAIN data loaded (2016->2020) for", nrow(train_shift), "counties.\n")
+cat("Avg TRAIN shift:", round(mean(train_shift$SHIFT_16_20) * 100, 2), "points\n")
+
+
+# ==========================================
+# 3. TEST: 2020 -> 2024 shift, predictors = 2020 embeddings
+# ==========================================
+
+test_shift <- inner_join(df_20_share, df_24_share, by = "county_fips") %>%
+  # attach 2020 embeddings + metadata we want to keep
+  inner_join(
+    df_20_full %>%
+      select(county_fips, county_name, state_po, vote_density, ends_with("_mean")),
+    by = "county_fips"
+  ) %>%
+  mutate(
+    SHIFT_20_24 = rep_share_24 - rep_share_20
+  ) %>%
+  select(
+    county_fips,
+    county_name,
+    state_po,
+    vote_density,
+    rep_share_20,      # kept for analysis, not used for training
+    SHIFT_20_24,       # target only for evaluation
+    ends_with("_mean") # predictors = 2020 embeddings
+  ) %>%
+  na.omit()
+
+cat("\nTEST data loaded (2020->2024) for", nrow(test_shift), "counties.\n")
+cat("Avg TEST shift:", round(mean(test_shift$SHIFT_20_24) * 100, 2), "points\n")
+
+
+# ==========================================
+# OPTIONAL: Remove extreme shift outliers (|SHIFT| > 0.15)
+#   Drop this RIGHT AFTER you create train_shift and test_shift (after na.omit()).
+#   Easy to comment out as a block.
+# ==========================================
+
+outlier_cutoff <- 0.15
+
+# --- TRAIN outliers (2016 -> 2020) ---
+n_train_before <- nrow(train_shift)
+train_shift <- train_shift %>% filter(abs(SHIFT_16_20) <= outlier_cutoff)
+n_train_after <- nrow(train_shift)
+
+cat("\n[Outlier filter | TRAIN] Before:", n_train_before,
+    "| After:", n_train_after,
+    "| Removed:", (n_train_before - n_train_after), "\n")
+cat("[Outlier filter | TRAIN] Shift range now:",
+    round(min(train_shift$SHIFT_16_20), 4), "to",
+    round(max(train_shift$SHIFT_16_20), 4), "\n")
+
+# --- TEST outliers (2020 -> 2024) ---
+n_test_before <- nrow(test_shift)
+test_shift <- test_shift %>% filter(abs(SHIFT_20_24) <= outlier_cutoff)
+n_test_after <- nrow(test_shift)
+
+cat("\n[Outlier filter | TEST]  Before:", n_test_before,
+    "| After:", n_test_after,
+    "| Removed:", (n_test_before - n_test_after), "\n")
+cat("[Outlier filter | TEST]  Shift range now:",
+    round(min(test_shift$SHIFT_20_24), 4), "to",
+    round(max(test_shift$SHIFT_20_24), 4), "\n")
+
+
+# ==========================================
+# 4. Make sure TRAIN and TEST have identical predictor columns
+# ==========================================
+
+id_cols_train <- c("county_fips", "county_name", "state_po", "vote_density", "rep_share_16", "rep_share_20", "SHIFT_16_20")
+id_cols_test  <- c("county_fips", "county_name", "state_po", "vote_density", "rep_share_20", "SHIFT_20_24")
+
+x_cols_train <- setdiff(names(train_shift), id_cols_train)
+x_cols_test  <- setdiff(names(test_shift),  id_cols_test)
+
+common_x <- intersect(x_cols_train, x_cols_test)
+
+train_shift <- train_shift %>% select(all_of(id_cols_train), all_of(common_x))
+test_shift  <- test_shift  %>% select(all_of(id_cols_test),  all_of(common_x))
+
+cat("\nUsing", length(common_x), "shared embedding predictors.\n")
+
+
+# ==========================================
+# 5. 5-Fold CV ON TRAIN (2016->2020), predict TEST (2020->2024)
+# ==========================================
+
+set.seed(55)
+train_shift <- train_shift %>%
+  mutate(fold_id = sample(rep(1:5, length.out = n())))
+
+test_preds_by_fold <- list()
+importances <- list()
+
+cat("\nStarting CV: train on 2016->2020 (2016 embeddings), predict 2020->2024 (2020 embeddings)...\n")
+
+for (k in 1:5) {
+
+  train_df <- train_shift %>% filter(fold_id != k)
+
+  rf_model <- ranger(
+    SHIFT_16_20 ~ . - county_fips - county_name - state_po - vote_density - rep_share_16 - rep_share_20 - fold_id,
+    data       = train_df,
+    num.trees  = 500,
+    mtry       = 21,
+    importance = "impurity",
+    seed       = 42
+  )
+
+  preds <- predict(rf_model, data = test_shift)$predictions
+
+  tmp <- test_shift %>%
+    mutate(
+      fold_model = k,
+      Predicted_Shift = preds
+    )
+
+  test_preds_by_fold[[k]] <- tmp
+  importances[[k]] <- rf_model$variable.importance
+
+  cat("  Fold", k, "model trained (2016->2020) and applied to 2020->2024.\n")
+}
+
+results <- bind_rows(test_preds_by_fold) %>%
+  group_by(county_fips, county_name, state_po, vote_density, rep_share_20, SHIFT_20_24) %>%
+  summarise(
+    Predicted_Shift = mean(Predicted_Shift),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    Error = Predicted_Shift - SHIFT_20_24,
+    Abs_Error = abs(Error)
+  )
+
+
+# ==========================================
+# 6. Metrics (evaluated on 2020->2024)
+# ==========================================
+
+rss  <- sum(results$Error^2)
+tss  <- sum((results$SHIFT_20_24 - mean(results$SHIFT_20_24))^2)
+r2   <- 1 - (rss / tss)
+rmse <- sqrt(mean(results$Error^2))
+
+cat("\n==========================================")
+cat("\nTRANSFER MODEL RESULTS (EARLY-YEAR EMBEDDINGS)")
+cat("\nTrain: 2016->2020 (2016 emb) | Test: 2020->2024 (2020 emb)")
+cat("\n==========================================")
+cat("\nR-Squared: ", round(r2, 3))
+cat("\nRMSE:      ", round(rmse, 4), "(", round(rmse*100, 2), "percentage points )")
+cat("\n==========================================\n")
+
+
+# ==========================================
+# 7. Visualizations (same as before)
+# ==========================================
+
+p1 <- ggplot(results, aes(x = SHIFT_20_24, y = Predicted_Shift)) +
+  geom_point(alpha = 0.3, size = 1, color = "purple") +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +
+  geom_smooth(method = "lm", color = "orange", se = FALSE) +
+  labs(
+    title = "Early-year embeddings: 2016→2020 trained, 2020→2024 predicted",
+    subtitle = paste0("R² = ", round(r2, 3), " | RMSE = ", round(rmse, 4)),
+    x = "Actual Shift (2020 → 2024)",
+    y = "Predicted Shift (trained on 2016 → 2020)"
+  ) +
+  scale_x_continuous(labels = scales::percent) +
+  scale_y_continuous(labels = scales::percent) +
+  theme_minimal()
+print(p1)
+
+p2 <- ggplot(results, aes(x = rep_share_20, y = Error)) +
+  geom_hline(yintercept = 0, color = "red", linetype = "dashed") +
+  geom_point(alpha = 0.4, size = 0.8) +
+  geom_smooth(method = "loess", color = "blue", fill = "gray90") +
+  labs(
+    title = "Where were the surprises (transfer model, early embeddings)?",
+    subtitle = "Positive Error = model expected a more pro-GOP shift than happened",
+    x = "2020 GOP Vote Share (Baseline)",
+    y = "Prediction Error (Pred - Actual)"
+  ) +
+  scale_x_continuous(labels = scales::percent) +
+  theme_minimal()
+print(p2)
+
+avg_imp <- bind_rows(lapply(importances, function(x) as.data.frame(t(x)))) %>%
+  summarise(across(everything(), mean)) %>%
+  pivot_longer(everything(), names_to = "Feature", values_to = "Importance") %>%
+  arrange(desc(Importance)) %>%
+  slice(1:15)
+
+p3 <- ggplot(avg_imp, aes(x = reorder(Feature, Importance), y = Importance)) +
+  geom_col(fill = "darkcyan") +
+  coord_flip() +
+  labs(
+    title = "Top features (learned from 2016 embeddings)",
+    subtitle = "Top 15 features by impurity importance (avg across folds)",
+    x = "",
+    y = "Variable Importance (Impurity)"
+  ) +
+  theme_minimal()
+print(p3)
+
+# ==========================================
+# 9. Visualization 4: R² by Vote Density Decile (TRANSFER MODEL)
+#   Drop this right after p3 (and before write_csv).
+# ==========================================
+
+# Helper to compute R² safely (returns NA if variance is zero)
+r2_fun <- function(actual, pred) {
+  rss <- sum((pred - actual)^2, na.rm = TRUE)
+  tss <- sum((actual - mean(actual, na.rm = TRUE))^2, na.rm = TRUE)
+  if (is.na(tss) || tss == 0) return(NA_real_)
+  1 - rss / tss
+}
+
+r2_by_density_decile <- results %>%
+  mutate(
+    density_decile = ntile(vote_density, 10)
+    # If density is super skewed, you may prefer:
+    # density_decile = ntile(log1p(vote_density), 10)
+  ) %>%
+  group_by(density_decile) %>%
+  summarise(
+    n = n(),
+    r2 = r2_fun(SHIFT_20_24, Predicted_Shift),
+    rmse = sqrt(mean((Predicted_Shift - SHIFT_20_24)^2, na.rm = TRUE)),
+    density_min = min(vote_density, na.rm = TRUE),
+    density_max = max(vote_density, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+print(r2_by_density_decile)
+
+p4 <- ggplot(r2_by_density_decile, aes(x = factor(density_decile), y = r2)) +
+  geom_col() +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(
+    title = "Transfer-model performance by vote density",
+    subtitle = "R² computed within each vote_density decile (test period: 2020→2024)",
+    x = "Vote Density Decile (1 = lowest density, 10 = highest)",
+    y = "R² (within decile)"
+  ) +
+  theme_minimal()
+
+print(p4)
+
+# ==========================================
+# 8. Save
+# ==========================================
+
+write_csv(results, "data/results/county_change_m2_early_embeddings_results.csv")
+cat("Saved: data/results/county_change_m2_early_embeddings_results.csv\n")
+```
+
+
+```{r}
+
+library(tidyverse)
+library(ranger)
+
+# ==============================================================================
+# GOAL (DELTA MODEL):
+#   Train on 2016 -> 2020 shifts using DELTA embeddings (2020 - 2016),
+#   then predict 2020 -> 2024 shifts using DELTA embeddings (2024 - 2020),
+#   WITHOUT training on 2020 -> 2024 shifts.
+#
+#   Predictors: Axx_mean deltas only (suffix: _delta)
+#   Target (train): SHIFT_16_20
+#   Eval (test):    SHIFT_20_24
+# ==============================================================================
+
+# ==========================================
+# 0. Load base files
+# ==========================================
+
+df_16 <- read_csv("data/prep/counties/clean_county_emb_16_17.csv", show_col_types = FALSE)
+df_20 <- read_csv("data/prep/counties/clean_county_emb_20.csv",     show_col_types = FALSE)
+df_24 <- read_csv("data/prep/counties/clean_county_emb_24.csv",     show_col_types = FALSE)
+
+# We'll use only the _mean embeddings for deltas (consistent with your earlier scripts)
+emb_cols_16 <- names(df_16) %>% keep(~ str_detect(.x, "_mean$"))
+emb_cols_20 <- names(df_20) %>% keep(~ str_detect(.x, "_mean$"))
+emb_cols_24 <- names(df_24) %>% keep(~ str_detect(.x, "_mean$"))
+
+common_emb <- Reduce(intersect, list(emb_cols_16, emb_cols_20, emb_cols_24))
+
+cat("Using", length(common_emb), "shared *_mean embedding columns for deltas.\n")
+
+# ==========================================
+# 1. TRAIN data: 2016 vs 2020 (delta = 2020 - 2016)
+# ==========================================
+
+df_16_small <- df_16 %>%
+  select(
+    county_fips,
+    rep_share_16 = rep_share,
+    all_of(common_emb)
+  ) %>%
+  rename_with(~ paste0(.x, "_16"), all_of(common_emb))
+
+df_20_small <- df_20 %>%
+  select(
+    county_fips,
+    county_name,
+    state_po,
+    vote_density,
+    rep_share_20 = rep_share,
+    all_of(common_emb)
+  ) %>%
+  rename_with(~ paste0(.x, "_20"), all_of(common_emb))
+
+train_join <- inner_join(df_16_small, df_20_small, by = "county_fips") %>%
+  mutate(SHIFT_16_20 = rep_share_20 - rep_share_16)
+
+# Build delta predictors safely (NO cur_column)
+train_deltas <- purrr::map_dfc(common_emb, function(nm) {
+  train_join[[paste0(nm, "_20")]] - train_join[[paste0(nm, "_16")]]
+})
+names(train_deltas) <- paste0(common_emb, "_delta")
+
+train_shift <- bind_cols(train_join, train_deltas) %>%
+  select(
+    county_fips, county_name, state_po, vote_density,
+    rep_share_16, rep_share_20,
+    SHIFT_16_20,
+    ends_with("_delta")
+  ) %>%
+  na.omit()
+
+cat("\nTRAIN data loaded (2016->2020) for", nrow(train_shift), "counties.\n")
+cat("Avg TRAIN shift:", round(mean(train_shift$SHIFT_16_20) * 100, 2), "points\n")
+
+# ==========================================
+# 2. TEST data: 2020 vs 2024 (delta = 2024 - 2020)
+# ==========================================
+
+df_20_base <- df_20 %>%
+  select(
+    county_fips,
+    rep_share_20 = rep_share,
+    all_of(common_emb)
+  ) %>%
+  rename_with(~ paste0(.x, "_20"), all_of(common_emb))
+
+df_24_small <- df_24 %>%
+  select(
+    county_fips,
+    county_name,
+    state_po,
+    vote_density,
+    rep_share_24 = rep_share,
+    all_of(common_emb)
+  ) %>%
+  rename_with(~ paste0(.x, "_24"), all_of(common_emb))
+
+test_join <- inner_join(df_20_base, df_24_small, by = "county_fips") %>%
+  mutate(SHIFT_20_24 = rep_share_24 - rep_share_20)
+
+# Build delta predictors safely (NO cur_column)
+test_deltas <- purrr::map_dfc(common_emb, function(nm) {
+  test_join[[paste0(nm, "_24")]] - test_join[[paste0(nm, "_20")]]
+})
+names(test_deltas) <- paste0(common_emb, "_delta")
+
+test_shift <- bind_cols(test_join, test_deltas) %>%
+  select(
+    county_fips, county_name, state_po, vote_density,
+    rep_share_20,
+    SHIFT_20_24,
+    ends_with("_delta")
+  ) %>%
+  na.omit()
+
+cat("\nTEST data loaded (2020->2024) for", nrow(test_shift), "counties.\n")
+cat("Avg TEST shift:", round(mean(test_shift$SHIFT_20_24) * 100, 2), "points\n")
+
+# ==========================================
+# OPTIONAL: Remove extreme shift outliers (|SHIFT| > 0.15)
+#   Drop this RIGHT AFTER you create train_shift and test_shift (after na.omit()).
+#   Easy to comment out as a block.
+# ==========================================
+
+outlier_cutoff <- 0.15
+
+# --- TRAIN outliers (2016 -> 2020) ---
+n_train_before <- nrow(train_shift)
+train_shift <- train_shift %>% filter(abs(SHIFT_16_20) <= outlier_cutoff)
+n_train_after <- nrow(train_shift)
+
+cat("\n[Outlier filter | TRAIN] Before:", n_train_before,
+    "| After:", n_train_after,
+    "| Removed:", (n_train_before - n_train_after), "\n")
+cat("[Outlier filter | TRAIN] Shift range now:",
+    round(min(train_shift$SHIFT_16_20), 4), "to",
+    round(max(train_shift$SHIFT_16_20), 4), "\n")
+
+# --- TEST outliers (2020 -> 2024) ---
+n_test_before <- nrow(test_shift)
+test_shift <- test_shift %>% filter(abs(SHIFT_20_24) <= outlier_cutoff)
+n_test_after <- nrow(test_shift)
+
+cat("\n[Outlier filter | TEST]  Before:", n_test_before,
+    "| After:", n_test_after,
+    "| Removed:", (n_test_before - n_test_after), "\n")
+cat("[Outlier filter | TEST]  Shift range now:",
+    round(min(test_shift$SHIFT_20_24), 4), "to",
+    round(max(test_shift$SHIFT_20_24), 4), "\n")
+
+# ==========================================
+# 3. Ensure identical predictor columns between TRAIN and TEST
+# ==========================================
+
+id_cols_train <- c("county_fips", "county_name", "state_po", "vote_density",
+                   "rep_share_16", "rep_share_20", "SHIFT_16_20")
+id_cols_test  <- c("county_fips", "county_name", "state_po", "vote_density",
+                   "rep_share_20", "SHIFT_20_24")
+
+x_cols_train <- setdiff(names(train_shift), id_cols_train)
+x_cols_test  <- setdiff(names(test_shift),  id_cols_test)
+
+common_x <- intersect(x_cols_train, x_cols_test)
+
+train_shift <- train_shift %>% select(all_of(id_cols_train), all_of(common_x))
+test_shift  <- test_shift  %>% select(all_of(id_cols_test),  all_of(common_x))
+
+cat("\nUsing", length(common_x), "shared DELTA predictors.\n")
+
+# ==========================================
+# 4. 5-Fold CV on TRAIN (2016->2020), predict TEST (2020->2024)
+# ==========================================
+
+set.seed(55)
+train_shift <- train_shift %>%
+  mutate(fold_id = sample(rep(1:5, length.out = n())))
+
+test_preds_by_fold <- list()
+importances <- list()
+
+cat("\nStarting CV: train on 2016->2020 DELTAS, predict 2020->2024 DELTAS...\n")
+
+for (k in 1:5) {
+
+  train_df <- train_shift %>% filter(fold_id != k)
+
+  rf_model <- ranger(
+    SHIFT_16_20 ~ . - county_fips - county_name - state_po - vote_density - rep_share_16 - rep_share_20 - fold_id,
+    data       = train_df,
+    num.trees  = 500,
+    mtry       = min(21, length(common_x)),  # guard if fewer predictors
+    importance = "impurity",
+    seed       = 42
+  )
+
+  preds <- predict(rf_model, data = test_shift)$predictions
+
+  tmp <- test_shift %>%
+    mutate(
+      fold_model = k,
+      Predicted_Shift = preds
+    )
+
+  test_preds_by_fold[[k]] <- tmp
+  importances[[k]] <- rf_model$variable.importance
+
+  cat("  Fold", k, "model trained (on 2016->2020) and applied to 2020->2024.\n")
+}
+
+# Average predictions across the 5 independently-trained models
+results <- bind_rows(test_preds_by_fold) %>%
+  group_by(county_fips, county_name, state_po, vote_density, rep_share_20, SHIFT_20_24) %>%
+  summarise(
+    Predicted_Shift = mean(Predicted_Shift),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    Error = Predicted_Shift - SHIFT_20_24,
+    Abs_Error = abs(Error)
+  )
+
+# ==========================================
+# 5. Metrics (evaluated on 2020->2024)
+# ==========================================
+
+rss  <- sum(results$Error^2)
+tss  <- sum((results$SHIFT_20_24 - mean(results$SHIFT_20_24))^2)
+r2   <- 1 - (rss / tss)
+rmse <- sqrt(mean(results$Error^2))
+
+cat("\n==========================================")
+cat("\nDELTA TRANSFER MODEL RESULTS")
+cat("\nTrain: 2016->2020 (delta 20-16) | Test: 2020->2024 (delta 24-20)")
+cat("\n==========================================")
+cat("\nR-Squared: ", round(r2, 3))
+cat("\nRMSE:      ", round(rmse, 4), "(", round(rmse*100, 2), "percentage points )")
+cat("\n==========================================\n")
+
+# ==========================================
+# 6. Visualization 1: Actual vs Predicted Shift
+# ==========================================
+
+p1 <- ggplot(results, aes(x = SHIFT_20_24, y = Predicted_Shift)) +
+  geom_point(alpha = 0.3, size = 1, color = "purple") +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +
+  geom_smooth(method = "lm", color = "orange", se = FALSE) +
+  labs(
+    title = "Delta-embeddings transfer: (20-16) trained, (24-20) predicted",
+    subtitle = paste0("R² = ", round(r2, 3), " | RMSE = ", round(rmse, 4)),
+    x = "Actual Shift (2020 → 2024)",
+    y = "Predicted Shift (trained on 2016 → 2020 deltas)"
+  ) +
+  scale_x_continuous(labels = scales::percent) +
+  scale_y_continuous(labels = scales::percent) +
+  theme_minimal()
+
+print(p1)
+
+# ==========================================
+# 7. Visualization 2: Error vs Baseline Partisanship
+# ==========================================
+
+p2 <- ggplot(results, aes(x = rep_share_20, y = Error)) +
+  geom_hline(yintercept = 0, color = "red", linetype = "dashed") +
+  geom_point(alpha = 0.4, size = 0.8) +
+  geom_smooth(method = "loess", color = "blue", fill = "gray90") +
+  labs(
+    title = "Where were the surprises (delta transfer model)?",
+    subtitle = "Positive Error = model expected a more pro-GOP shift than happened",
+    x = "2020 GOP Vote Share (Baseline)",
+    y = "Prediction Error (Pred - Actual)"
+  ) +
+  scale_x_continuous(labels = scales::percent) +
+  theme_minimal()
+
+print(p2)
+
+# ==========================================
+# 8. Visualization 3: Top Predictive Delta Features
+# ==========================================
+
+avg_imp <- bind_rows(lapply(importances, function(x) as.data.frame(t(x)))) %>%
+  summarise(across(everything(), mean)) %>%
+  pivot_longer(everything(), names_to = "Feature", values_to = "Importance") %>%
+  arrange(desc(Importance)) %>%
+  slice(1:15)
+
+p3 <- ggplot(avg_imp, aes(x = reorder(Feature, Importance), y = Importance)) +
+  geom_col(fill = "darkcyan") +
+  coord_flip() +
+  labs(
+    title = "Which delta embeddings predict swings (learned from 2016→2020)?",
+    subtitle = "Top 15 delta features by impurity importance (avg across folds)",
+    x = "",
+    y = "Variable Importance (Impurity)"
+  ) +
+  theme_minimal()
+
+print(p3)
+
+# ==========================================
+# 9. OPTIONAL DROP-IN VIS: R² by vote_density decile
+#   - Put this AFTER you create `results` and compute r2/rmse (anywhere after results exists).
+# ==========================================
+
+results_r2_by_decile <- results %>%
+  mutate(
+    density_decile = ntile(vote_density, 10)
+  ) %>%
+  group_by(density_decile) %>%
+  summarise(
+    n = n(),
+    rss = sum(Error^2),
+    tss = sum((SHIFT_20_24 - mean(SHIFT_20_24))^2),
+    r2  = 1 - rss / tss,
+    rmse = sqrt(mean(Error^2)),
+    density_min = min(vote_density, na.rm = TRUE),
+    density_max = max(vote_density, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+p4 <- ggplot(results_r2_by_decile, aes(x = factor(density_decile), y = r2)) +
+  geom_col() +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(
+    title = "Model performance by vote-density decile (Delta transfer model)",
+    subtitle = "R² computed within each decile on the 2020→2024 test set",
+    x = "Vote-density decile (1 = lowest density, 10 = highest)",
+    y = "R² within decile"
+  ) +
+  theme_minimal()
+
+print(p4)
+
+# ==========================================
+# 10. Save
+# ==========================================
+
+write_csv(results, "data/results/county_change_m3_delta_results.csv")
+cat("Saved: data/results/county_change_m3_delta_results.csv\n")
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# Let's validate the data!
+```{r}
+
+library(tidyverse)
+
+df_16 <- read.csv("data/prep/counties/clean_county_emb_16_17.csv")
+df_20 <- read.csv("data/prep/counties/clean_county_emb_20.csv")
+df_24 <- read.csv("data/prep/counties/clean_county_emb_24.csv")
+
+dups <- function(df, name) {
+  n_dup <- df %>% count(county_fips) %>% filter(n > 1) %>% nrow()
+  cat(name, "- duplicate county_fips rows:", n_dup, "\n")
+}
+
+dups(df_16, "df_16")
+dups(df_20, "df_20")
+dups(df_24, "df_24")
+
+train_join <- inner_join(
+  df_16 %>% select(county_fips, rep_share_16 = rep_share),
+  df_20 %>% select(county_fips, rep_share_20 = rep_share),
+  by = "county_fips"
+)
+
+test_join <- inner_join(
+  df_20 %>% select(county_fips, rep_share_20 = rep_share),
+  df_24 %>% select(county_fips, rep_share_24 = rep_share),
+  by = "county_fips"
+)
+
+cat("Rows train_join:", nrow(train_join), "\n")
+cat("Unique county_fips train_join:", n_distinct(train_join$county_fips), "\n\n")
+
+cat("Rows test_join:", nrow(test_join), "\n")
+cat("Unique county_fips test_join:", n_distinct(test_join$county_fips), "\n")
+
+```
+```{r}
+
+summary(df_16$rep_share)
+summary(df_20$rep_share)
+summary(df_24$rep_share)
+
+range(df_16$rep_share, na.rm = TRUE)
+range(df_20$rep_share, na.rm = TRUE)
+range(df_24$rep_share, na.rm = TRUE)
+
+```
+
+```{r}
+train_shift_vals <- train_join %>% mutate(SHIFT_16_20 = rep_share_20 - rep_share_16)
+test_shift_vals  <- test_join  %>% mutate(SHIFT_20_24 = rep_share_24 - rep_share_20)
+
+summary(train_shift_vals$SHIFT_16_20)
+summary(test_shift_vals$SHIFT_20_24)
+
+sd(train_shift_vals$SHIFT_16_20, na.rm=TRUE)
+sd(test_shift_vals$SHIFT_20_24, na.rm=TRUE)
+
+
+shift <- test_shift_vals$SHIFT_20_24
+quantile(shift, c(.001,.01,.05,.5,.95,.99,.999), na.rm=TRUE)
+```
+```{r}
+library(tidyverse)
+
+# --- Load 2020 + 2024 with totalvotes kept ---
+df_20 <- read_csv("data/prep/counties/clean_county_emb_20.csv") %>%
+  select(county_fips, county_name, state_po,
+         rep_share_20 = rep_share,
+         totalvotes_20 = total_votes)
+
+df_24 <- read_csv("data/prep/counties/clean_county_emb_24.csv") %>%
+  select(county_fips,
+         rep_share_24 = rep_share,
+         totalvotes_24 = total_votes)
+
+# --- Join + compute shift ---
+shift_tbl <- inner_join(df_20, df_24, by = "county_fips") %>%
+  mutate(
+    SHIFT_20_24 = rep_share_24 - rep_share_20,
+    votes_min   = pmin(totalvotes_20, totalvotes_24),
+    votes_max   = pmax(totalvotes_20, totalvotes_24)
+  )
+
+# --- Bottom 25 (biggest negative shifts) ---
+bottom25 <- shift_tbl %>%
+  arrange(SHIFT_20_24) %>%
+  slice(1:25) %>%
+  select(county_fips, county_name, state_po,
+         rep_share_20, rep_share_24, SHIFT_20_24,
+         totalvotes_20, totalvotes_24, votes_min, votes_max)
+
+# --- Top 25 (biggest positive shifts) ---
+top25 <- shift_tbl %>%
+  arrange(desc(SHIFT_20_24)) %>%
+  slice(1:25) %>%
+  select(county_fips, county_name, state_po,
+         rep_share_20, rep_share_24, SHIFT_20_24,
+         totalvotes_20, totalvotes_24, votes_min, votes_max)
+
+cat("\nBottom 25 shifts (most negative):\n")
+print(bottom25)
+
+cat("\nTop 25 shifts (most positive):\n")
+print(top25)
+
+```
+
+```{r}
+
+library(dplyr)
+
+var = 20207
+og <- read.csv("data/prep/counties/countypres_2000-2024.csv")
+
+# Your original check (still fine)
+og[og$county_fips == var, c("county_fips", "party", "year", "candidatevotes", "totalvotes", "mode")]
+
+
+shift_tbl[shift_tbl$county_fips == var, ]
+```
+
+```{r}
+library(dplyr)
+library(stringr)
+
+og <- read.csv("data/prep/counties/countypres_2000-2024.csv")
+
+pres_2024 <- og %>%
+  filter(year == 2024) %>%
+  mutate(
+    office_up = toupper(trimws(as.character(office))),
+    candidate = str_squish(as.character(candidate)),
+    party     = str_squish(as.character(party)),
+    cand_up   = toupper(candidate),
+    party_up  = toupper(party)
+  ) %>%
+  filter(grepl("PRESIDENT", office_up))
+
+# define the same "summary row" flag
+pres_2024 <- pres_2024 %>%
+  mutate(
+    is_summary_row =
+      grepl("TOTAL", cand_up) |
+      grepl("VOTES CAST", cand_up) |
+      ((party_up == "" | is.na(party_up)) &
+         !is.na(candidatevotes) & !is.na(totalvotes) &
+         candidatevotes == totalvotes)
+  )
+
+# For each county_fips: do we have ANY non-summary candidate rows?
+county_summary_status <- pres_2024 %>%
+  group_by(county_fips) %>%
+  summarise(
+    n_rows = n(),
+    n_non_summary = sum(!is_summary_row, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# counties that would be fully dropped by summary-row removal
+all_summary_counties <- county_summary_status %>%
+  filter(n_non_summary == 0)
+
+cat("2024 counties with ONLY summary rows:", nrow(all_summary_counties), "\n")
+head(all_summary_counties, 20)
 ```
 
