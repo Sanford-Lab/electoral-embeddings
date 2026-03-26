@@ -3,3 +3,5 @@
 source("clean_county_votes_00-24.R")
 source("clean&join_county_emb.R")
 source("clean_county_demographics.R")
+source("clean_20_precinct_emb.R")
+source("clean_24_precinct_emb.R")

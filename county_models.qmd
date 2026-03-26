@@ -587,21 +587,23 @@ This script takes ~20 sec to run
 # ==========================================
 
 # Load clean datasets
+# Note: Added `total_votes_20 = total_votes` assuming your CSV has a total_votes column!
 df_20 <- read_csv("data/prep/counties/clean_county_emb_20.csv") %>%
-  select(county_fips, rep_share_20 = rep_share)
+  select(county_fips, rep_share_20 = rep_share, total_votes_20 = total_votes)
 
 df_24 <- read_csv("data/prep/counties/clean_county_emb_24.csv") %>%
-  # We rename the 2024 share and keep the embeddings/metadata from this year
-  rename(rep_share_24 = rep_share)
+  # We rename the 2024 share and total votes
+  rename(rep_share_24 = rep_share, total_votes_24 = total_votes)
 
 # Join the years to calculate the shift
-# Inner join ensures we only look at counties that exist in both datasets
 data_shift <- inner_join(df_20, df_24, by = "county_fips") %>%
   mutate(
     # TARGET VARIABLE: Positive = Shift toward Trump, Negative = Shift toward Harris/Biden
-    SHIFT_20_24 = rep_share_24 - rep_share_20
+    SHIFT_20_24 = rep_share_24 - rep_share_20,
+    # NEW: Calculate the percentage change in total votes
+    VOTE_CHANGE = (total_votes_24 - total_votes_20) / total_votes_20
   ) %>%
-  # Prepare for modeling: Keep ID, Shift, 2020 Baseline, and Embeddings
+  # Prepare for modeling: Keep ID, Shift, 2020 Baseline, Vote Change, and Embeddings
   select(
     county_fips,
     county_name,
@@ -609,6 +611,7 @@ data_shift <- inner_join(df_20, df_24, by = "county_fips") %>%
     vote_density,
     rep_share_20,    # Kept for analysis/plotting, NOT for training
     SHIFT_20_24,     # The Target
+    VOTE_CHANGE,     # Kept temporarily for filtering
     ends_with("_mean") # The Predictors (2024 embeddings)
   ) %>%
   na.omit()
@@ -617,25 +620,62 @@ cat("Data Loaded. Analyzing shift for", nrow(data_shift), "counties.\n")
 cat("Average Shift:", round(mean(data_shift$SHIFT_20_24) * 100, 2), "points\n")
 
 # ==========================================
-# OPTIONAL: Remove extreme shift outliers (|SHIFT_20_24| > 0.15)
-#   - Drop-in section (easy to comment out)
-#   - Put this RIGHT AFTER you create `data_shift` and `na.omit()`
+# FILTER: Remove extreme turnout changes using IQR (2x)
 # ==========================================
 
-outlier_cutoff <- 0.15
+# 1. Calculate IQR bounds for 2020-2024 Vote Change
+q1 <- quantile(data_shift$VOTE_CHANGE, 0.25, na.rm = TRUE)
+q3 <- quantile(data_shift$VOTE_CHANGE, 0.75, na.rm = TRUE)
+iqr <- q3 - q1
+lower_bound <- q1 - 2 * iqr
+upper_bound <- q3 + 2 * iqr
 
-cat("\n[Outlier filter] Before:", nrow(data_shift), "counties\n")
+# 2. Plot a scatterplot of change in voteshare vs change in total_votes
+p_outliers <- ggplot(data_shift, aes(x = VOTE_CHANGE, y = SHIFT_20_24)) +
+  geom_point(alpha = 0.5, color = "steelblue") +
+  # Add red lines to show exactly where we are cutting the data dynamically
+  geom_vline(xintercept = c(lower_bound, upper_bound), linetype = "dashed", color = "red") +
+  labs(
+    title = "Vote Share Shift vs. Total Votes Change (2020-2024)",
+    subtitle = sprintf("Red lines = 2*IQR bounds (%.1f%% to %.1f%%)", lower_bound*100, upper_bound*100),
+    x = "Change in Total Votes (2020 to 2024)",
+    y = "Shift in GOP Vote Share"
+  ) +
+  scale_x_continuous(labels = scales::percent) +
+  scale_y_continuous(labels = scales::percent) +
+  theme_minimal()
 
-data_shift <- data_shift %>%
-  filter(abs(SHIFT_20_24) <= outlier_cutoff)
+print(p_outliers)
 
-cat("[Outlier filter] After: ", nrow(data_shift), "counties\n")
-cat("[Outlier filter] Removed:", sum(abs(data_shift$SHIFT_20_24) > outlier_cutoff), "(should be 0 after filter)\n")
+cat("\n[Turnout IQR filter] Before:", nrow(data_shift), "counties\n")
+
+# 3. Filter out counties outside the IQR bounds
+data_filtered <- data_shift %>%
+  filter(VOTE_CHANGE >= lower_bound & VOTE_CHANGE <= upper_bound)
+
+# Print how many counties were removed
+counties_removed <- nrow(data_shift) - nrow(data_filtered)
+
+cat("[Turnout IQR filter] After: ", nrow(data_filtered), "counties\n")
+cat("[Turnout IQR filter] Removed:", counties_removed, "counties due to extreme total vote swing\n")
+
+
+# Create a dataframe of just the dropped counties
+dropped_counties <- data_shift %>% # (assuming you have the pre-filter data)
+  filter(VOTE_CHANGE < lower_bound | VOTE_CHANGE > upper_bound)
+
+# Look at which states lost the most counties
+table(dropped_counties$state_po) %>% sort(decreasing = TRUE) %>% head(10)
+
+# 4. Reassign back to data_shift and drop VOTE_CHANGE so it doesn't leak into the Random Forest model
+data_shift <- data_filtered %>% 
+  select(-VOTE_CHANGE)
 
 # Optional quick summary of remaining shift range
-cat("[Outlier filter] Shift range now:",
+cat("[Turnout IQR filter] Vote Share Shift range now:",
     round(min(data_shift$SHIFT_20_24), 4), "to",
     round(max(data_shift$SHIFT_20_24), 4), "\n")
+
 
 # ==========================================
 # 2. Setup 5-Fold Cross-Validation
@@ -1012,6 +1052,7 @@ print(plot3)
 train on 2016 -> 2020, then predict 2020 -> 2024 shifts, WITHOUT training on 2020 -> 2024.
 
 ```{r}
+
 library(tidyverse)
 library(ranger)
 
@@ -1028,15 +1069,16 @@ library(ranger)
 # ==========================================
 
 df_16 <- read_csv("data/prep/counties/clean_county_emb_16_17.csv") %>%
-  select(county_fips, rep_share_16 = rep_share)
+  select(county_fips, rep_share_16 = rep_share, total_votes_16 = total_votes)
 
 df_20 <- read_csv("data/prep/counties/clean_county_emb_20.csv") %>%
-  rename(rep_share_20 = rep_share)
+  rename(rep_share_20 = rep_share, total_votes_20 = total_votes)
 
 # TRAIN set: 2016 -> 2020 shift, predictors = 2020 embeddings
 train_shift <- inner_join(df_16, df_20, by = "county_fips") %>%
   mutate(
-    SHIFT_16_20 = rep_share_20 - rep_share_16
+    SHIFT_16_20 = rep_share_20 - rep_share_16,
+    VOTE_CHANGE_16_20 = (total_votes_20 - total_votes_16) / total_votes_16
   ) %>%
   select(
     county_fips,
@@ -1046,6 +1088,7 @@ train_shift <- inner_join(df_16, df_20, by = "county_fips") %>%
     rep_share_16,
     rep_share_20,      # kept for analysis, not used for training
     SHIFT_16_20,       # target for training
+    VOTE_CHANGE_16_20, # kept temporarily for filtering
     ends_with("_mean") # predictors = 2020 embeddings
   ) %>%
   na.omit()
@@ -1059,15 +1102,16 @@ cat("Avg TRAIN shift:", round(mean(train_shift$SHIFT_16_20) * 100, 2), "points\n
 # ==========================================
 
 df_20_base <- read_csv("data/prep/counties/clean_county_emb_20.csv") %>%
-  select(county_fips, rep_share_20 = rep_share)
+  select(county_fips, rep_share_20 = rep_share, total_votes_20 = total_votes)
 
 df_24 <- read_csv("data/prep/counties/clean_county_emb_24.csv") %>%
-  rename(rep_share_24 = rep_share)
+  rename(rep_share_24 = rep_share, total_votes_24 = total_votes)
 
 # TEST set: 2020 -> 2024 shift, predictors = 2024 embeddings
 test_shift <- inner_join(df_20_base, df_24, by = "county_fips") %>%
   mutate(
-    SHIFT_20_24 = rep_share_24 - rep_share_20
+    SHIFT_20_24 = rep_share_24 - rep_share_20,
+    VOTE_CHANGE_20_24 = (total_votes_24 - total_votes_20) / total_votes_20
   ) %>%
   select(
     county_fips,
@@ -1076,6 +1120,7 @@ test_shift <- inner_join(df_20_base, df_24, by = "county_fips") %>%
     vote_density,
     rep_share_20,      # kept for analysis, not used for training
     SHIFT_20_24,       # target only for evaluation
+    VOTE_CHANGE_20_24, # kept temporarily for filtering
     ends_with("_mean") # predictors = 2024 embeddings
   ) %>%
   na.omit()
@@ -1084,37 +1129,83 @@ cat("\nTEST data loaded (2020->2024) for", nrow(test_shift), "counties.\n")
 cat("Avg TEST shift:", round(mean(test_shift$SHIFT_20_24) * 100, 2), "points\n")
 
 # ==========================================
-# OPTIONAL: Remove extreme shift outliers (|SHIFT| > 0.15)
-#   Drop this RIGHT AFTER you create train_shift and test_shift (after na.omit()).
-#   Easy to comment out as a block.
+# FILTER: Remove extreme turnout changes using IQR (2x)
 # ==========================================
 
-outlier_cutoff <- 0.15
-
 # --- TRAIN outliers (2016 -> 2020) ---
+# 1. Calculate IQR bounds for TRAIN
+q1_train <- quantile(train_shift$VOTE_CHANGE_16_20, 0.25, na.rm = TRUE)
+q3_train <- quantile(train_shift$VOTE_CHANGE_16_20, 0.75, na.rm = TRUE)
+iqr_train <- q3_train - q1_train
+lower_train <- q1_train - 2 * iqr_train
+upper_train <- q3_train + 2 * iqr_train
+
+# 2. Plot TRAIN with dynamic bounds
+p_outliers_train <- ggplot(train_shift, aes(x = VOTE_CHANGE_16_20, y = SHIFT_16_20)) +
+  geom_point(alpha = 0.5, color = "steelblue") +
+  geom_vline(xintercept = c(lower_train, upper_train), linetype = "dashed", color = "red") +
+  labs(
+    title = "TRAIN: Vote Share Shift vs. Total Votes Change (2016-2020)",
+    subtitle = sprintf("Red lines = 2*IQR bounds (%.1f%% to %.1f%%)", lower_train*100, upper_train*100),
+    x = "Change in Total Votes (2016 to 2020)",
+    y = "Shift in GOP Vote Share"
+  ) +
+  scale_x_continuous(labels = scales::percent) +
+  scale_y_continuous(labels = scales::percent) +
+  theme_minimal()
+
+print(p_outliers_train)
+
+# 3. Filter TRAIN
 n_train_before <- nrow(train_shift)
-train_shift <- train_shift %>% filter(abs(SHIFT_16_20) <= outlier_cutoff)
+train_shift <- train_shift %>% 
+  filter(VOTE_CHANGE_16_20 >= lower_train & VOTE_CHANGE_16_20 <= upper_train)
 n_train_after <- nrow(train_shift)
 
-cat("\n[Outlier filter | TRAIN] Before:", n_train_before,
+cat("\n[Turnout IQR filter | TRAIN] Before:", n_train_before,
     "| After:", n_train_after,
-    "| Removed:", (n_train_before - n_train_after), "\n")
-cat("[Outlier filter | TRAIN] Shift range now:",
-    round(min(train_shift$SHIFT_16_20), 4), "to",
-    round(max(train_shift$SHIFT_16_20), 4), "\n")
+    "| Removed:", (n_train_before - n_train_after), "counties\n")
+
+# Drop temporary column
+train_shift <- train_shift %>% select(-VOTE_CHANGE_16_20)
+
 
 # --- TEST outliers (2020 -> 2024) ---
+# 1. Calculate IQR bounds for TEST
+q1_test <- quantile(test_shift$VOTE_CHANGE_20_24, 0.25, na.rm = TRUE)
+q3_test <- quantile(test_shift$VOTE_CHANGE_20_24, 0.75, na.rm = TRUE)
+iqr_test <- q3_test - q1_test
+lower_test <- q1_test - 2 * iqr_test
+upper_test <- q3_test + 2 * iqr_test
+
+# 2. Plot TEST with dynamic bounds
+p_outliers_test <- ggplot(test_shift, aes(x = VOTE_CHANGE_20_24, y = SHIFT_20_24)) +
+  geom_point(alpha = 0.5, color = "darkorange") +
+  geom_vline(xintercept = c(lower_test, upper_test), linetype = "dashed", color = "red") +
+  labs(
+    title = "TEST: Vote Share Shift vs. Total Votes Change (2020-2024)",
+    subtitle = sprintf("Red lines = 2*IQR bounds (%.1f%% to %.1f%%)", lower_test*100, upper_test*100),
+    x = "Change in Total Votes (2020 to 2024)",
+    y = "Shift in GOP Vote Share"
+  ) +
+  scale_x_continuous(labels = scales::percent) +
+  scale_y_continuous(labels = scales::percent) +
+  theme_minimal()
+
+print(p_outliers_test)
+
+# 3. Filter TEST
 n_test_before <- nrow(test_shift)
-test_shift <- test_shift %>% filter(abs(SHIFT_20_24) <= outlier_cutoff)
+test_shift <- test_shift %>% 
+  filter(VOTE_CHANGE_20_24 >= lower_test & VOTE_CHANGE_20_24 <= upper_test)
 n_test_after <- nrow(test_shift)
 
-cat("\n[Outlier filter | TEST]  Before:", n_test_before,
+cat("\n[Turnout IQR filter | TEST]  Before:", n_test_before,
     "| After:", n_test_after,
-    "| Removed:", (n_test_before - n_test_after), "\n")
-cat("[Outlier filter | TEST]  Shift range now:",
-    round(min(test_shift$SHIFT_20_24), 4), "to",
-    round(max(test_shift$SHIFT_20_24), 4), "\n")
+    "| Removed:", (n_test_before - n_test_after), "counties\n")
 
+# Drop temporary column
+test_shift <- test_shift %>% select(-VOTE_CHANGE_20_24)
 
 # ==========================================
 # 3. Make sure TRAIN and TEST have identical predictor columns
@@ -1331,6 +1422,9 @@ cat("Saved")
 
 
 ```{r}
+
+## CHANGE to voter turnout outliers
+
 library(tidyverse)
 library(ranger)
 
@@ -1642,6 +1736,8 @@ cat("Saved: data/results/county_change_m2_early_embeddings_results.csv\n")
 
 
 ```{r}
+
+## CHANGE to voter turnout outliers
 
 library(tidyverse)
 library(ranger)

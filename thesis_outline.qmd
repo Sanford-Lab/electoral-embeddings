@@ -1,0 +1,57 @@
+---
+title: "thesis_outline"
+format: html
+editor: visual
+---
+
+## Introduction/Abstract
+
+## Motivation
+
+In July 2025, Google released the AlphaEarth Foundations (AEF) Satellite Embedding dataset. This dataset, which covers all of Earth's land mass and shallow waters, contains annual, 64-dimension embeddings at an incredible 10-meter resolution going back to 2017. The embeddings' combination of low dimensionality, high resolution, and representational power marks a significant advance in the field of satellite embeddings. Our goal is to use the new AlphaEarth embeddings to predict voting patterns in US presidential elections, specifically the 2016, 2020, and 2024 elections. We're interested in several questions here: First, how well can embeddings alone predict precinct-level and county-level voteshare out of sample? And what do the embeddings 'see' that allows them to make these predictions? Second, can embeddings predict the county-level change in voteshare between elections? And third, how do the embeddings' predictions compare to traditional demographic predictors? If the embeddings are indeed powerful predictors in these contexts, then they are likely to capture meaningful information (that is not currently captured in other sources) about the physical and social factors that influence voting behavior and drive electoral outcomes.
+
+## Method
+
+We use publicly available data on county and precinct-level geographic boundaries and votes in the 2016, 2020, and 2024 US presidential elections, along with demographic data from the US Census. We join these datasets with the AlphaEarth embeddings to create master datasets for analysis. We then train various random forests to predict voteshare and voteshare change using different combinations of embeddings and traditional demographic predictors.
+
+### Data
+
+County-level election results are obtained from Harvard [Dataverse](https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi:10.7910/DVN/VOQCHQ). The county shapefiles are taken from the census website for each of [2016](https://www2.census.gov/geo/tiger/TIGER2016/COUNTY/), [2020](https://www2.census.gov/geo/tiger/TIGER2020/COUNTY/), and [2024](https://www2.census.gov/geo/tiger/TIGER2024/COUNTY/). We have precinct-level results from 2020 and 2024 only. 2020 data, which includes shapefiles, was also taken from the Harvard [Dataverse](https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi:10.7910/DVN/K7760H). Since each state's data is formatted separately and doesn't contain a reliable primary key, we append the data with unique primary keys ourselves. The 2024 data is taken from the New York Times' publicly available election data that they used to create a detailed election map, specifically from this [repository](https://github.com/nytimes/presidential-precinct-map-2024?tab=readme-ov-file). Similarly, we clean this data, convert the topojson to shp format, and append with unique identifiers. Comprehensive demographic data, taken here from the [USDA](https://www.ers.usda.gov/data-products/county-level-data-sets), is only available at the county level, and unfortunately also not at the granularity of every election year. Although some of the date ranges are occasionally awkward (2019 to 2023, for example) or simply don't extend to the 2024 election, we still expect demographic data to have some useful predictive value. We use data on employment level and education level.
+
+Then we upload geographic boundaries in shapefile format to Google Earth Engine in order to create the embeddings for future analysis. Both the county returns (which cover 2000-2024) and the 2024 precinct shapefile can be uploaded as a single assets since they are each one file, while the 2020 precinct data is split by state and must be uploaded as 51 separate assets. Once this is done, we run javascript scripts in the Google Engine Code Editor for each set of embeddings we want to create: 2020 and 2024 precinct embeddings; and 2016, 2020, and 2024 county embeddings. In each of these snapshots, we calculate mean, standard deviation, and skew embedding vectors for every region (county or precinct) as well as the geographic area of the region. The results are saved in csv format, using the naming convention `raw_emb_precinct_20.csv`, where "precinct" can be replaced with county and "20" can be replaced with the relevant year.
+
+From this point, we prepare the data for analysis. Precinct data already combined shapefiles and vote share results, so there is no joining required. All we need to do is filter out precincts that are too small (having fewer than 7 total votes or 0 geographic area) and mutate the data to create the relevant columns for analysis. County data must be cleaned and joined in multiple directions — vote share returns, embeddings, and demographic data. We begin by cleaning and reformatting the 2000-2024 county returns data to be joined for each of the three election snapshots, then join embeddings data, then clean and join demographic data, all via the county FIPS unique identifier. To run all of the cleaning scripts (after all raw data has been downloaded, including embeddings, results, and demographic data) run the chunk below.
+
+```{r}
+source("master_clean.R")
+```
+
+Our data now cleaned, joined, and ready for analysis, we proceed to modeling.
+
+### Modeling
+
+#### Precinct-level prediction
+
+First, we train random forest regression models to predict the Trump vote share in 2020 and 2024 at the precinct level using only the satellite embedding features. We explicitly leave out traditional predictors like voter density and area. We use 5-fold cross-validation, training on 80% of the precincts and predicting the remaining 20% across five separate iterations, to evaluate out-of-sample performance. To run the models and see the results for both 2020 and 2024, run the chunk below.
+
+```{r}
+## Uncomment these if you want to rerun the models themselves
+# source("precinct20_m1.R")
+# source("precinct24_m1.R")
+
+source("precinct20_m1_vis.R")
+source("precinct24_m1_vis.R")
+
+```
+
+Predicting WITH additional information -- density, area, etc., compare performance Predicting 2024 using 2020 embeddings
+
+#### County-level prediction
+
+## Results
+
+Explain all of the results from different models, + visualizations Map most important features Include some images of places that embeddings predicted similarly
+
+## Discussion/Conclusion
+
+??

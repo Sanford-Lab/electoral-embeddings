@@ -33,6 +33,9 @@ Rename the topojson `raw_precinct_24.topojson` and add it to
 Now you can run the script `clean_24_precinct.R` to convert to shp,
 append with primary keys, and zip for GEE use.
 
+**2016 county shapefiles** are from the census, link
+[here](https://www2.census.gov/geo/tiger/TIGER2016/COUNTY/)
+
 **2020 county shapefiles** are from the census, link
 [here](https://www2.census.gov/geo/tiger/TIGER2020/COUNTY/)
 
@@ -62,7 +65,7 @@ validation, using ONLY embeddings as predictors
 5.  county_change_m1
 
 Model 2 results: — same random forest structure, adding some demographic
-data as
+data as predictors
 
 1.  county24_m2
 2.  county20_m2
