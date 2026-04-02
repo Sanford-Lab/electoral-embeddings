@@ -50,3 +50,6 @@ venv/
 .idea/
 *.sublime-project
 *.sublime-workspace
+
+#temp files
+.RDataTmp*
