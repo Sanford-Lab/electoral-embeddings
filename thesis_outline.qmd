@@ -8,11 +8,11 @@ editor: visual
 
 ## Motivation
 
-In July 2025, Google released the AlphaEarth Foundations (AEF) Satellite Embedding dataset. This dataset, which covers all of Earth's land mass and shallow waters, contains annual, 64-dimension embeddings at an incredible 10-meter resolution going back to 2017. The embeddings' combination of low dimensionality, high resolution, and representational power marks a significant advance in the field of satellite embeddings. Our goal is to use the new AlphaEarth embeddings to predict voting patterns in US presidential elections, specifically the 2016, 2020, and 2024 elections. We're interested in several questions here: First, how well can embeddings alone predict precinct-level and county-level voteshare out of sample? And what do the embeddings 'see' that allows them to make these predictions? Second, can embeddings predict the county-level change in voteshare between elections? And third, how do the embeddings' predictions compare to traditional demographic predictors? If the embeddings are indeed powerful predictors in these contexts, then they are likely to capture meaningful information (that is not currently captured in other sources) about the physical and social factors that influence voting behavior and drive electoral outcomes.
+In July 2025, Google released the AlphaEarth Foundations (AEF) Satellite Embedding dataset. This dataset, which covers all of Earth's land mass and shallow waters, contains annual, 64-dimension embeddings at an incredible 10-meter resolution going back to 2017. The embeddings' combination of low dimensionality, high resolution, and representational power marks a significant advance in the field of satellite embeddings. Our goal is to use the new AlphaEarth embeddings to predict voting patterns in US presidential elections, specifically the 2016, 2020, and 2024 elections. We're interested in several questions here: First, how well can embeddings alone predict precinct-level and county-level vote share out of sample? And what do the embeddings 'see' that allows them to make these predictions? Second, can embeddings predict the county-level change in vote share between elections? And third, how do the embeddings' predictions compare to traditional demographic predictors? If the embeddings are indeed powerful predictors in these contexts, then they are likely to capture meaningful information (that is not currently captured in other sources) about the physical and social factors that influence voting behavior and drive electoral outcomes.
 
 ## Method
 
-We use publicly available data on county and precinct-level geographic boundaries and votes in the 2016, 2020, and 2024 US presidential elections, along with demographic data from the US Census. We join these datasets with the AlphaEarth embeddings to create master datasets for analysis. We then train various random forests to predict voteshare and voteshare change using different combinations of embeddings and traditional demographic predictors.
+We use publicly available data on county and precinct-level geographic boundaries and votes in the 2016, 2020, and 2024 US presidential elections, along with demographic data from the US Census. We join these datasets with the AlphaEarth embeddings to create master datasets for analysis. We then train various random forests to predict vote share and vote share change using different combinations of embeddings and traditional demographic predictors.
 
 ### Data
 
@@ -30,28 +30,168 @@ Our data now cleaned, joined, and ready for analysis, we proceed to modeling.
 
 ### Modeling
 
-#### Precinct-level prediction
+We conduct analysis separately for precinct-level vote share and county-level vote share. Both levels of granularity have their strengths and weaknesses. Precincts are much smaller — there are over 160,000 in the U.S., compared to just over 3,000 counties. The smaller geographical area and higher resolution means that the embedding vectors will likely contain more differentiated information. Indeed, our results indicate that the embeddings have greater predictive power at the precinct level than the county level. There are also drawbacks, however. Precinct boundaries change much more frequently than county boundaries and the data are generally less reliable. It is extremely difficult to track vote share changes between elections for all precincts, for example, because there's no broad convention used for uniquely identifying the precincts. For this sort of between-election comparison, county results are much stronger. County boundaries barely change over time, and counties don't come in and out of existence frequently. We can use county FIPS codes to join results and track changes between different elections. Furthermore, demographic data is not collected at the precinct level, only at the county level, so our exploration of demographic effects will also be at the county level.
 
-First, we train random forest regression models to predict the Trump vote share in 2020 and 2024 at the precinct level using only the satellite embedding features. We explicitly leave out traditional predictors like voter density and area. We use 5-fold cross-validation, training on 80% of the precincts and predicting the remaining 20% across five separate iterations, to evaluate out-of-sample performance. To run the models and see the results for both 2020 and 2024, run the chunk below.
+For our analysis, we largely use an 80%-20% train-test split and 5-fold cross-validation to train our 500-tree random forests.
 
-```{r}
-## Uncomment these if you want to rerun the models themselves
-# source("precinct20_m1.R")
-# source("precinct24_m1.R")
+At the precinct level specifically (for both 2020 and 2024), we use two 5x cross-validation methods: random spatial CV, where we train on a random 80% of the precincts and test on the last 20%; and leave-out-group CV, where we train on all precincts from 40 out of 50 states and test on the last 10 states.
 
-source("precinct20_m1_vis.R")
-source("precinct24_m1_vis.R")
+All of these predictions are done only with satellite embeddings — we explicitly leave out traditional predictors like voter density and area. Next, we add voter density and area to the embeddings as additional predictors to see if the models improve. Separately, we fit a model with only voter density and area as predictors, without embeddings, to see how much of an improvement the embeddings accomplish. We're curious about this because high-density urban areas tend to lean more Democrat while low-density rural areas tend lean Republican, and we also expect the embeddings to "see" the density to some extent.
 
-```
+At the county level, we are able to conduct more analysis. First, we replicate the same two cross-validation methods used at the precinct level, but instead for counties. Second, we use temporal CV, where we train on one election year, then test on the next election year. Third, we combine the random spatial CV with temporal CV, training on 80% of counties in one election year, then testing on the remaining 20% of counties in the next election year.
 
-Predicting WITH additional information -- density, area, etc., compare performance Predicting 2024 using 2020 embeddings
+These models all predict simple vote share at the county level. But we are also curious to explore if embeddings are capable of predicting the change in vote share between elections. As such, we fit models to predict vote share change from the last election using random spatial CV (training on 80% of counties in an election year, then testing on the remaining 80% in that same election year) and temporal CV (training on vote share change in one election year, and testing using the vote share change in the next election year).
 
-#### County-level prediction
+Again, all of this is done with only the satellite embeddings as predictors — we leave out voter density and area, as well as all demographic information. Next, we add in these additional predictors to find out how much the models improve; and finally we fit models using only density, area, and demographic information, to compare the performance to satellite embeddings alone.
 
 ## Results
 
-Explain all of the results from different models, + visualizations Map most important features Include some images of places that embeddings predicted similarly
+In this section we review the results of the different models described above, considering metrics like R-squared, RMSE, and mean absolute error. We also include relevant plots to better understand the strengths and weaknesses of the models' predictions. For the sake of efficiency and to avoid repetition because there are so many different combinations of predictors and validation methods, we only discuss certain model outputs in depth -- but at the end of the results section, we include a comprehensive table with each model's R-squared performance for easy reference and comparison. We begin by loading in the relevant visualization functions we need.
+
+```{r}
+source("prepare_visuals.R")
+```
+
+The results and discussion are organized into three categories: predicting vote share using precinct-level results, predicting vote share using county-level results, and predicting shifts in vote share between elections.
+
+### Precinct-level vote share results
+
+Our first test is to see how effectively the embeddings alone can predict vote share in a single election year using 5-fold random spatial cross validation. The results here are for 2020.
+
+```{r}
+visualize_precinct_model("20", "m1")
+```
+
+The embeddings alone achieve an impressive R-squared of 0.735. The plots indicate that the model's performance is quite consistent across different voter-densities, and explains at least 48% of the variability in every single voter density decile. This is already notable — we had suspected that the key driver of voting behavior captured by embeddings would be density. But even within similarly dense areas (each decile), the model has significant predictive power. The heat graph of actual vs. predicted values shows that the random forest has pulled predictions away from the extremes. This is expected since random forests average over many predictions and naturally moderate extreme or over-fit predictions.
+
+For comparison, the 2024 embeddings do an extremely similar job predicting 2024 precinct-level voteshare. R-squared achieved is 0.720, with at least 0.47 R-squared across every density decile. The shape is similar too, with the middle deciles sagging slightly below the performance of denser areas. The heat map of actual vs. predicted vote share demonstrates the same trend.
+
+In order to better contextualize the performance of the embeddings, we train a model to predict 2020 precinct-level vote share using only voter density and area measured in kilometers squared. Here are the results.
+
+```{r}
+visualize_precinct_model("20", "m3")
+```
+
+Voter density and area alone achieve an R-squared of 0.405 with a significantly higher (over 5 percentage points) mean absolute error of 0.1411. As expected, the R-squared values within voter density deciles are all very small (and mostly negative). Because the only predictors are area and density, it makes sense that within a small density range, these predictors have very little additional predictive power. The heat map of actual vs. predicted values indicates that predictions are pulled even farther from the extremes, which is also not surprising given the relatively undifferentiated model.
+
+Again for comparison, the performance of this model for 2024 is quite similar to the 2020 performance. R-squared is 0.373, with mean absolute error of 0.1374, and per-decile performance is not good. Predictions are pulled away from extremes again.
+
+Next, we evaluate the combined power of these predictors: embeddings along with density and area. We stick with the 2020 election to remain consistent.
+
+```{r}
+visualize_precinct_model("20", "m4")
+```
+
+Notably, the performance of the model barely improves. R-squared is 0.739, 0.004 higher than the embeddings-alone model. Mean absolute error is likewise 0.001 lower. The other plots, like performance per density decile and actual vs. predicted, closely mirror the embeddings-only results. The key difference is that vote density and area occupy the top two spots for feature importance. Interestingly, the other features appear in exactly the same order, just with relatively lower importance scores. This implies that no single embedding feature is responsible for encoding vote density or area — instead, the information is spread across the embeddings, while still being almost completely captured.
+
+The 2024 differences are almost identical — the addition of density and area improves R-squared performance by 0.004, per-density decile performance and actual vs. predicted plots are functionally the same, and feature importance is reshuffled in the same way.
+
+Finally, we train a model using a more challenging cross-validation method described in the methodology section above: we train on 40 of the 50 states, then test on the remaining states, again covering the whole country with 5 separate folds.
+
+```{r}
+visualize_precinct_model("20", "m2")
+```
+
+This model retains a still-impressive but markedly lower performance of 0.542 R-squared compared to the original model. There are definite similarities: the feature importance is functionally unchanged, and the actual vs predicted heat map has a similar shape. However, the biggest notable difference is the model's performance within different density deciles. Most deciles still show significant predictive power from the embeddings, but not nearly as much as the first model; for no single density decile does the model achieve an R-squared exceeding 0.28 (whereas before, R-squared in each decile exceeded 0.48). Morever, the trend clearly shows that the model performs worst in the densest areas. This suggests that dense, metropolitan areas in different states have distinct qualities that directly bear on voting outcomes. Training on the urban areas in 40 states that don't include Texas or New York, for example, may not capture the dynamics that are specific to New York City, Houston, and Austin.
+
+The performance for the 2024 model is similar but slightly worse, with an R-squared of 0.508, as well as a slightly worse per-density decile performance. Feature importance largely remained the same.
+
+Finally, we note that across all of these precinct models, embedding band A01 was consistently the most important embedding feature.
+
+### County-level vote share results
+
+We continue the analysis with county-level vote share prediction. We start with same-year prediction to compare the county performance to the more granular precinct performance above.
+
+Again, we train a model on the 2020 results, using only embeddings as predictors.
+
+```{r}
+visualize_county_model("20", "m1")
+```
+
+As expected, this model explains less variation than the precinct-level model, with a still-impressive R-squared of 0.674. However, the mean absolute error achieved is lower, at 0.0709. This all makes sense given the different scales of these models. Because there are so few counties compared to precincts (\~3,000 vs. \~160,000), and the counties cover a larger geographic area, as well as contain more voters, a couple of effects are likely. First, the embeddings are capturing less detail, because they're averaged over a much larger area. Second, the counties are less prone to very extreme vote share results. 0% vote share for Trump is far likelier to occur in a precinct with 40 voters than a county with 2,000 voters. This probably contributes both to the lower R-squared (since there is less natural variance in the data to begin with) and the lower mean absolute error (because county vote share results probably don't reach the same extremes as they may in precincts.)
+
+Examining the other results, we observe that the model again performs impressively well across voter density deciles. In 7 out of 10 deciles the model exceed R-squared of 0.53. In the remaining three, the performance hovers between 0.30 and 0.35. Again, this could be the result of less variation in highly dense counties to begin with. The actual vs. predicted plot shares a similar trend to what we saw at the precinct level.
+
+One notable difference from the precinct-level models is the feature importance: bands A43 and A47 occupy the top two feature importance spots in this model, while the same two don't even crack the top 10 most important features in the precinct-trained models.
+
+Broadly, the performance for models trained on 2016 and 2024 results are very similar.
+
+Next we train a model on everything except embeddings — area, density and demographics, which includes: the percentage of people who didn't finish high school, the percentage of people who finished high school only, the percentage of people with some college education, the percent of people with a bachelors degree, the unemployment rate, and the size of the civilian labor force. Again, this model is trained using the 2020 election results.
+
+```{r}
+visualize_county_model("20", "m4")
+```
+
+Perhaps surprisingly, this model achieves an R-squared of 0.573. This means that the model trained on embeddings alone, even at the relatively low-resolution county level size, outperforms significantly. The embeddings encode more information about voting patterns than voter density and demographics. Consistent with all other results, the actual vs. predicted plot indicates that the model is moderating its predictions of the extremes — it overpredicts instances of very low vote-share and under-predicts instances of very high vote share. One big difference from the previous model is the per-density decile performance. The model still retains significant predictive power within each decile. But interestingly, the bar chart shows a bowl shape, demonstrating that among counties with more average density, the model doesn't perform quite as well. It performs highest in the densest counties. Along with the "pct_bachelors_plus" predictor taking the highest spot on feature performance, this decile trend suggests that denser counties (which are generally more educated) are more predictable by education level. This is consistent with the conventional political idea that denser, more educated areas in the US lean to the left.
+
+2016 and 2024 model results are very similar.
+
+Next, we combine all predictors to see if model performance improves. This model is again trained on 2020 county-level results, and now includes all embeddings, density, area, and demographics as predictors.
+
+```{r}
+visualize_county_model("20", "m2")
+```
+
+This model achieves an impressive R-squared of 0.746, our highest result yet. The mean absolute error is over a full percentage point lower than any other model, at 0.0592. Many of the same trends are present in these results as in the rest of the results: feature importance appears to be in the same order as the previous model, with demographic and density predictors taking the top 5 spots. The remaining high-importance embedding bands are present in the embeddings-only model as well. Per-density decile performance is especially strong: in no decile does the model perform below an R-squared of 0.52. In general, the trend appears to favor upper-mid-density areas, with the 5th, 6th, 7th, and 8th deciles all seeing R-squared values of at least 0.70.
+
+These results are similarly strong (and the trends are similarly shaped) for the models trained on both 2016 and 2024 data.
+
+Next, we train a model using a different kind of cross-validation, enabled by the county FIPS codes that permit joins across election years. This model uses only embeddings as predictors, is trained on 2020 results, and is tested against 2024 results. This validation method is extremely relevant because it involves accurately predicting future elections.
+
+```{r}
+visualize_county_model("20-24", "m9")
+```
+
+This model achieves a strong R-squared of 0.506. Unsurprisingly, it performs worse than the original model which is trained and tested within a single election year (0.506 vs 0.674). However, the overall strengths and weaknesses of the two models are similar: the same features are important, the actual vs. predicted plot has the same trend of pulling away from the extremes, and the per-density decile results indicate that this model performs worse in the most high density and the most low density counties. Overall, it is expected that the results would be similar but weaker across the board, since most counties across the nation didn't experience enormous vote shifts in either direction. Results for the 2016 - 2020 model mirror these trends.
+
+Finally, we train a model using an even more rigorous validation method, a combination of spatial and temporal cross validation. Using only embeddings as predictors, we're curious how well a model can predict results of the next election for counties it hasn't been trained on. This model trains on 80% of counties in 2020 and tests on the remaining 20% of counties in 2024 across five folds.
+
+```{r}
+visualize_county_model("20-24", "m13")
+```
+
+As expected, this model achieves a lower R-squared score of 0.334. This is consistent with the drop in performance we observe in the precinct-level models when we use the leave-out-group spatial validation. Like the other results, this model seems to under-predict Trump share in lower density areas and over-predict it in denser areas (we can see in the prediction error plot that most data, especially on the left-hand side of the graph, falls below the red dotted line). The model also performs worst in the lowest density decile, achieving an R-squared of -0.27, meaning that its predictions are significantly worse than if every prediction had simply been the mean voteshare in that decile. Although these results are a noticeable decline from the previous models, 0.334 remains an impressive R-squared, given that the model was forced to predict voteshare for counties it had never seen. It is entirely possible that many counties have distinct features captured by embeddings that are simply not present in other counties.
+
+Finally, we note that across these county-level models, embedding bands A43 and A40 are consistently among the most important embedding features.
+
+### Vote share change results
+
+Finally, we give the embeddings their most challenging task: predicting vote share change (or vote shift) between elections. We expect this task to be significantly more difficult than predicting vote share alone. Predicting vote share is broad in comparison — urban vs. rural areas, different geographic or climatic regions, all may share historical voting tendencies, to some extent capturable by satellite embeddings as shown above; meanwhile, vote shift is far narrower, changing constantly election to election, and is likely more related to events over a 4 year presidency that are not captured by a satellite view.
+
+First, we train a model to predict vote shift from 2016 to 2020 using 2020 embeddings, testing within the same year using the same 5-fold random spatial cross-validation as above.
+
+```{r}
+visualize_change_model(model_num = "m1", period = "16-20")
+```
+
+This model achieves an impressive R-squared of 0.471. Compared to some of the county-level vote share prediction models above, the prediction error appears on average quite consistent across baseline vote share. The model performs very well across voter density deciles as well, achieving at least 0.28 R-squared in every decile. Interestingly, embedding band A43 takes the highest feature importance spot, which it often did in the county-level vote share prediction models. The reason for this is not self-evident. Like most of the other models we've discussed, this one also tends to pull predictions away from the extremes. In the predicted vs. actual plot, we again see that the spread of actual shifts appears greater than the spread of predicted shifts.
+
+Ultimately, it is not surprising that the model achieves an impressive R-squared of 0.471 using the 2020 embeddings, since the model can learn (to the extent that it's possible) what counties tend to "look" like when they shift a certain way. When training a model to make the same predictions (2016-2020 vote shift) using the 2016 embeddings as predictors, the results are nearly identical: R-squared 0.469, and the plots closely mirror these.
+
+Next, we give the embeddings a more challenging task: again predicting 2016 to 2020 voteshift, but this time using the difference between embedding vectors from 2016 and 2020 as predictors.
+
+```{r}
+visualize_change_model(model_num = "m3", period = "20-24")
+```
+
+With the more challenging set of predictors, this model's performance declines. It achieves an R-squared of 0.292, which is still impressive considering that most counties over 4 years likely didn't experience many large physical changes that would be captured by embeddings, not to mention that it's unclear what relationship at all those changes might have to voting behavior. Interestingly, the performance of the model improves significantly as counties become denser. For the highest density decile, the model achieves a surprising R-squared of 0.47. Similar to many of the county-level vote share prediction models, for this model embedding band A40 also appears to be the most important feature.
+
+Finally, we attempt to predict vote shift from 2020 to 2024 by training on vote shift from 2016 to 2020. We use the earlier election's embeddings as predictors (i.e., using 2016 embeddings for the training set and 2020 embeddings for the test set). We expect this to be extremely challenging for the model since the direction of vote shift between elections can completely change.
+
+```{r}
+visualize_change_model(model_num = "m5")
+```
+
+This model results in the first overall negative R-squared we've seen so far: -0.502. The model struggles to predict vote shift in the 2024 election using 2020 vote shift. This difficulty seems especially pronounced for the highest and lowest voter density deciles, which have R-squared values of -0.69 and -0.82 respectively. Like other above models, embedding band A43 is the most important feature in this model.
+
+The seemingly poor performance and negative R-squared value are not surprising, and reflect a bad choice of predictors more than anything else. As we know, vote shift in the 2020 and 2024 elections generally occurred in opposite directions. In 2020, voters shifted toward Biden; in 2024, they shifted toward Trump. The better the embeddings are able to characterize a county that shifted toward Biden in 2020, the worse predictors they'd be of 2024 shift, which occurred in the opposite direction.
+
+Explain all of the results from different models, + visualizations
+
+Map most important features
+
+Include some images of places that embeddings predicted similarly
 
 ## Discussion/Conclusion
 
-??
+interpretation – what can we learn about the built environment, what sorts of preferences might we be capturing?

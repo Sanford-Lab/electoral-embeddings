@@ -6,7 +6,7 @@ editor: visual
 
 ## 5-Fold CV for 2020 (Predicting Trump Share)
 
-This script takes ~XXX min to run
+precinct20_m1
 
 ```{r}
 library(tidyverse)
@@ -94,14 +94,13 @@ full_results <- bind_rows(all_predictions) %>%
 write_csv(full_results, "data/results/precinct20_m1_results.csv")
 
 ```
-R-Squared:  0.735
-RMSE:       0.1203
-Mean Abs Error: 0.0885
 
+R-Squared: 0.735 RMSE: 0.1203 Mean Abs Error: 0.0885
 
 ## 5-Fold CV for 2024 (Predicting Trump Share)
 
-This script takes ~XXX min to run
+Precinct24_m1
+
 ```{r}
 
 # ==========================================
@@ -185,10 +184,483 @@ full_results <- bind_rows(all_predictions) %>%
 write_csv(full_results, "data/results/precinct24_m1_results.csv")
 ```
 
-R-Squared:  0.72
-RMSE:       0.1174
-Mean Abs Error: 0.0867
+R-Squared: 0.72 RMSE: 0.1174 Mean Abs Error: 0.0867
 
+precinct20_m2
+
+```{r}
+
+library(tidyverse)
+library(ranger)
+library(scales) # for comma labels in plots
+
+# ==========================================
+# 1. Load and Clean Data
+# ==========================================
+
+# Load the clean 2020 precinct dataset
+clean_data <- read_csv("data/prep/precincts/2020/clean_emb_precinct_20.csv")
+
+# Prepare data:
+# Keep ID, state, and density for analysis, but EXCLUDE them from the model formula later.
+data_rf <- clean_data %>%
+  select(
+    precinct_id, 
+    state,               # NEW: Must keep state to assign folds
+    vote_density, 
+    TRUMPSHARE = rep_share, 
+    ends_with("_mean")   # Only embedding means
+  ) %>%
+  na.omit()
+
+cat("Data Loaded. Precincts:", nrow(data_rf), "\n")
+
+# ==========================================
+# 2. Setup 5-Fold SPATIAL Cross-Validation
+# ==========================================
+
+set.seed(42)
+
+# 1. Extract the unique states
+unique_states <- unique(data_rf$state)
+
+# 2. Shuffle the states and assign each one a fold (1 through 5)
+state_folds <- tibble(
+  state = sample(unique_states),
+  fold_id = rep(1:5, length.out = length(unique_states))
+)
+
+# 3. Join the fold assignments back to the precinct data
+data_rf <- data_rf %>%
+  left_join(state_folds, by = "state")
+
+# Quick check to see how many precincts are in each fold
+cat("\nPrecincts per fold (Notice they won't be perfectly even anymore, which is fine!):\n")
+print(table(data_rf$fold_id))
+
+# Initialize an empty list to store predictions
+all_predictions <- list()
+
+cat("\nStarting 5-Fold State-Level Cross-Validation on", nrow(data_rf), "precincts...\n")
+
+# ==========================================
+# 3. The CV Loop
+# ==========================================
+
+for(k in 1:5) {
+  
+  # A. Split Data
+  train_df <- data_rf %>% filter(fold_id != k)
+  test_df  <- data_rf %>% filter(fold_id == k)
+  
+  # B. Train Model
+  # We exclude precinct_id, state, vote_density, and fold_id from the predictors
+  rf_model <- ranger(
+    TRUMPSHARE ~ . - precinct_id - state - vote_density - fold_id, 
+    data       = train_df,
+    num.trees  = 500,
+    mtry       = 8, 
+    importance = "impurity",
+    seed       = 42
+  )
+  
+  # C. Predict
+  preds <- predict(rf_model, data = test_df)$predictions
+  
+  # D. Store Results
+  test_df$Predicted_Share <- preds
+  all_predictions[[k]] <- test_df
+  
+  cat("  Fold", k, "complete. States tested:", length(unique(test_df$state)), "| Rows predicted:", nrow(test_df), "\n")
+}
+
+# Combine all 5 folds back into one big dataframe
+full_results_spatial <- bind_rows(all_predictions) %>%
+  mutate(
+    Error = Predicted_Share - TRUMPSHARE,
+    Abs_Error = abs(Error)
+  )
+
+# save results
+write_csv(full_results_spatial, "data/results/precinct20_m2_results.csv")
+```
+
+precinct24_m2
+
+```{r}
+
+library(tidyverse)
+library(ranger)
+library(scales) # for comma labels in plots
+
+# ==========================================
+# 1. Load and Clean Data
+# ==========================================
+
+# Load the clean 2020 precinct dataset
+clean_data <- read_csv("data/prep/precincts/2024/clean_emb_precinct_24.csv")
+
+# Prepare data:
+# Keep ID, state, and density for analysis, but EXCLUDE them from the model formula later.
+data_rf <- clean_data %>%
+  select(
+    precinct_id, 
+    state,               # NEW: Must keep state to assign folds
+    vote_density, 
+    TRUMPSHARE = rep_share, 
+    ends_with("_mean")   # Only embedding means
+  ) %>%
+  na.omit()
+
+cat("Data Loaded. Precincts:", nrow(data_rf), "\n")
+
+# ==========================================
+# 2. Setup 5-Fold SPATIAL Cross-Validation
+# ==========================================
+
+set.seed(42)
+
+# 1. Extract the unique states
+unique_states <- unique(data_rf$state)
+
+# 2. Shuffle the states and assign each one a fold (1 through 5)
+state_folds <- tibble(
+  state = sample(unique_states),
+  fold_id = rep(1:5, length.out = length(unique_states))
+)
+
+# 3. Join the fold assignments back to the precinct data
+data_rf <- data_rf %>%
+  left_join(state_folds, by = "state")
+
+# Quick check to see how many precincts are in each fold
+cat("\nPrecincts per fold (Notice they won't be perfectly even anymore, which is fine!):\n")
+print(table(data_rf$fold_id))
+
+# Initialize an empty list to store predictions
+all_predictions <- list()
+
+cat("\nStarting 5-Fold State-Level Cross-Validation on", nrow(data_rf), "precincts...\n")
+
+# ==========================================
+# 3. The CV Loop
+# ==========================================
+
+for(k in 1:5) {
+  
+  # A. Split Data
+  train_df <- data_rf %>% filter(fold_id != k)
+  test_df  <- data_rf %>% filter(fold_id == k)
+  
+  # B. Train Model
+  # We exclude precinct_id, state, vote_density, and fold_id from the predictors
+  rf_model <- ranger(
+    TRUMPSHARE ~ . - precinct_id - state - vote_density - fold_id, 
+    data       = train_df,
+    num.trees  = 500,
+    mtry       = 8, 
+    importance = "impurity",
+    seed       = 42
+  )
+  
+  # C. Predict
+  preds <- predict(rf_model, data = test_df)$predictions
+  
+  # D. Store Results
+  test_df$Predicted_Share <- preds
+  all_predictions[[k]] <- test_df
+  
+  cat("  Fold", k, "complete. States tested:", length(unique(test_df$state)), "| Rows predicted:", nrow(test_df), "\n")
+}
+
+# Combine all 5 folds back into one big dataframe
+full_results_spatial <- bind_rows(all_predictions) %>%
+  mutate(
+    Error = Predicted_Share - TRUMPSHARE,
+    Abs_Error = abs(Error)
+  )
+
+# save results
+write_csv(full_results_spatial, "data/results/precinct24_m2_results.csv")
+```
+
+Other random spatial models, run using a function
+
+```{r}
+library(tidyverse)
+library(ranger)
+library(scales) # for comma labels in plots
+
+# ==========================================
+# 1. Define the Modeling Function
+# ==========================================
+# This function applies your exact 5-fold CV logic but dynamically changes 
+# the data and predictors based on the model we want to run.
+
+run_cv_model <- function(data_file, output_file, use_embeddings = TRUE) {
+  
+  cat("\n==========================================\n")
+  cat("RUNNING MODEL -> Output:", output_file, "\n")
+  cat("==========================================\n")
+  
+  # A. Load the data
+  clean_data <- read_csv(data_file, show_col_types = FALSE)
+  
+  # B. Prepare data and define the formula based on the model type
+  if (use_embeddings) {
+    # MODEL M4: Embeddings + area_km2 + vote_density
+    data_rf <- clean_data %>%
+      select(
+        precinct_id, 
+        area_km2,
+        vote_density, 
+        TRUMPSHARE = rep_share, 
+        ends_with("_mean") 
+      ) %>%
+      na.omit()
+    
+    # Formula uses everything except ID and fold_id
+    rf_formula <- TRUMPSHARE ~ . - precinct_id - fold_id
+    my_mtry <- 8 # Same as your original embedding model
+    
+  } else {
+    # MODEL M3: area_km2 + vote_density ONLY
+    data_rf <- clean_data %>%
+      select(
+        precinct_id, 
+        area_km2,
+        vote_density, 
+        TRUMPSHARE = rep_share
+      ) %>%
+      na.omit()
+    
+    # Formula explicitly uses only the two baseline predictors
+    rf_formula <- TRUMPSHARE ~ vote_density + area_km2
+    my_mtry <- 1 # Standard rule (p/3) for 2 features
+  }
+  
+  cat("Data Loaded. Precincts:", nrow(data_rf), "| Features included:", ifelse(use_embeddings, "Embeddings + Baseline", "Baseline ONLY"), "\n")
+  
+  # C. Setup 5-Fold Cross-Validation
+  set.seed(42)
+  data_rf <- data_rf %>%
+    mutate(fold_id = sample(rep(1:5, length.out = n())))
+  
+  all_predictions <- list()
+  
+  # D. The CV Loop
+  for(k in 1:5) {
+    
+    train_df <- data_rf %>% filter(fold_id != k)
+    test_df  <- data_rf %>% filter(fold_id == k)
+    
+    rf_model <- ranger(
+      formula    = rf_formula, 
+      data       = train_df,
+      num.trees  = 500,
+      mtry       = my_mtry, 
+      importance = "impurity",
+      seed       = 42
+    )
+    
+    # Predict and Store
+    preds <- predict(rf_model, data = test_df)$predictions
+    test_df$Predicted_Share <- preds
+    all_predictions[[k]] <- test_df
+    
+    cat("  Fold", k, "complete.\n")
+  }
+  
+  # E. Combine Folds and Calculate Errors
+  full_results <- bind_rows(all_predictions) %>%
+    mutate(
+      Error = Predicted_Share - TRUMPSHARE,
+      Abs_Error = abs(Error)
+    )
+  
+  # F. Save Results
+  write_csv(full_results, output_file)
+  cat("-> Saved to:", output_file, "\n\n")
+}
+
+# ==========================================
+# 2. Execute the 4 Models
+# ==========================================
+
+# Define file paths
+data_2020 <- "data/prep/precincts/2020/clean_emb_precinct_20.csv"
+data_2024 <- "data/prep/precincts/2024/clean_emb_precinct_24.csv"
+
+# ----- 2020 MODELS -----
+# M4: Embeddings + area_km2 + vote_density
+run_cv_model(
+  data_file = data_2020, 
+  output_file = "data/results/precinct20_m4_results.csv", 
+  use_embeddings = TRUE
+)
+
+# M3: area_km2 + vote_density ONLY
+run_cv_model(
+  data_file = data_2020, 
+  output_file = "data/results/precinct20_m3_results.csv", 
+  use_embeddings = FALSE
+)
+
+# ----- 2024 MODELS -----
+# M4: Embeddings + area_km2 + vote_density
+run_cv_model(
+  data_file = data_2024, 
+  output_file = "data/results/precinct24_m4_results.csv", 
+  use_embeddings = TRUE
+)
+
+# M3: area_km2 + vote_density ONLY
+run_cv_model(
+  data_file = data_2024, 
+  output_file = "data/results/precinct24_m3_results.csv", 
+  use_embeddings = FALSE
+)
+
+cat("All 4 models successfully trained and saved!\n")
+```
+
+Other leave-out-state CV models, run using a function
+
+```{r}
+library(tidyverse)
+library(ranger)
+
+# ==========================================
+# 1. Define the Spatial Precinct Modeling Function
+# ==========================================
+
+run_precinct_spatial_model <- function(data_file, year_label, model_type) {
+  
+  output_file <- paste0("data/results/precinct", year_label, "_", model_type, "_results.csv")
+  
+  cat("\n==========================================\n")
+  cat("RUNNING PRECINCT SPATIAL MODEL:", toupper(model_type), "| YEAR:", year_label, "\n")
+  cat("Output ->", output_file, "\n")
+  cat("==========================================\n")
+  
+  # A. Load the data
+  clean_data <- read_csv(data_file, show_col_types = FALSE)
+  
+  # B. Prepare data based on Model Type
+  if (model_type == "m6") {
+    # M6: Embeddings + area_km2 + vote_density
+    data_rf <- clean_data %>%
+      select(
+        precinct_id, 
+        state,             # Needed for spatial CV folds
+        TRUMPSHARE = rep_share, 
+        area_km2,          # Included as predictor
+        vote_density,      # Included as predictor
+        ends_with("_mean") # Included as predictors
+      ) %>%
+      na.omit()
+      
+  } else if (model_type == "m5") {
+    # M5: Baseline Spatial ONLY (area_km2 + vote_density)
+    data_rf <- clean_data %>%
+      select(
+        precinct_id, 
+        state, 
+        TRUMPSHARE = rep_share, 
+        area_km2,          # Included as predictor
+        vote_density       # Included as predictor
+      ) %>%
+      na.omit()
+  }
+  
+  # C. Formula and Feature Count
+  # We subtract precinct_id, state, and fold_id so they aren't used to predict.
+  # Notice we DO NOT subtract area_km2 or vote_density here, because we want the model to use them!
+  rf_formula <- TRUMPSHARE ~ . - precinct_id - state - fold_id
+  n_features <- ncol(data_rf) - 3 # Subtract precinct_id, state, share
+  
+  # Calculate mtry (Standard regression rule: features / 3, minimum of 1)
+  my_mtry <- min(8, max(1, floor(n_features / 3)))
+  
+  # D. Setup 5-Fold SPATIAL Cross-Validation
+  set.seed(42)
+  unique_states <- unique(data_rf$state)
+  
+  state_folds <- tibble(
+    state = sample(unique_states),
+    fold_id = rep(1:5, length.out = length(unique_states))
+  )
+  
+  data_rf <- data_rf %>% left_join(state_folds, by = "state")
+  
+  cat("Data Prepared. Precincts:", nrow(data_rf), "| States:", length(unique_states), "\n")
+  cat("Predictors:", n_features, "| mtry:", my_mtry, "\n")
+  
+  all_predictions <- list()
+  
+  # E. The CV Loop
+  for(k in 1:5) {
+    
+    train_df <- data_rf %>% filter(fold_id != k)
+    test_df  <- data_rf %>% filter(fold_id == k)
+    
+    rf_model <- ranger(
+      formula    = rf_formula, 
+      data       = train_df,
+      num.trees  = 500,
+      mtry       = my_mtry,
+      importance = "impurity",
+      seed       = 42
+    )
+    
+    # Predict and Store
+    preds <- predict(rf_model, data = test_df)$predictions
+    test_df$Predicted_Share <- preds
+    all_predictions[[k]] <- test_df
+    
+    states_tested <- length(unique(test_df$state))
+    cat("  Fold", k, "complete. States tested:", states_tested, "| Rows predicted:", nrow(test_df), "\n")
+  }
+  
+  # F. Combine Folds and Calculate Errors
+  full_results <- bind_rows(all_predictions) %>%
+    mutate(
+      Error = Predicted_Share - TRUMPSHARE,
+      Abs_Error = abs(Error)
+    )
+  
+  # G. Save Results
+  write_csv(full_results, output_file)
+  cat("-> Saved successfully to", output_file, "\n")
+}
+
+# ==========================================
+# 2. Execute All 4 Models
+# ==========================================
+
+# Define file paths
+file_20 <- "data/prep/precincts/2020/clean_emb_precinct_20.csv"
+file_24 <- "data/prep/precincts/2024/clean_emb_precinct_24.csv"
+
+# Map years to files
+years <- list("20" = file_20, "24" = file_24)
+
+# Models M5 and M6
+models <- c("m5", "m6")
+
+# Loop through both years and both models
+for (yr_label in names(years)) {
+  for (mod in models) {
+    run_precinct_spatial_model(
+      data_file = years[[yr_label]], 
+      year_label = yr_label, 
+      model_type = mod
+    )
+  }
+}
+
+cat("\nAll 4 Precinct-Level Spatial CV models successfully trained and saved!\n")
+```
 
 ## Results and Visualization
 
@@ -198,7 +670,7 @@ Mean Abs Error: 0.0867
 # ==========================================
 
 #full_results <- read_csv("data/results/precinct20_m1_results.csv")
-full_results <- read_csv("data/results/precinct24_m1_results.csv")
+full_results <- read_csv("data/results/precinct24_m6_results.csv")
 
 # Calculate metrics on the full dataset (all folds combined)
 rss  <- sum(full_results$Error^2)
@@ -292,4 +764,3 @@ plot3 <- ggplot(full_results, aes(x = TRUMPSHARE, y = Predicted_Share)) +
 print(plot3)
 
 ```
-
