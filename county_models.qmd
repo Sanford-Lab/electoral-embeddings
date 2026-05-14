@@ -628,6 +628,55 @@ for (pair in temporal_pairs) {
 cat("\nAll 8 Spatio-Temporal models successfully trained and saved!\n")
 ```
 
+## SINGLE all demographic, spatial 2020
+
+```{r}
+library(tidyverse)
+
+var <- read.csv("data/prep/counties/poststratification_2020_county_v2.csv")
+
+# Create the wide county-level dataset
+county_wide <- var %>%
+  
+  # Step A: Group the 7 specific age codes into 3 broad categories
+  mutate(
+    age_group = case_when(
+      age %in% 12:13 ~ "AgeBucket1",
+      age %in% 14:15 ~ "AgeBucket2",
+      age %in% 16:18 ~ "AgeBucket3",
+      TRUE ~ "Unknown"
+    )
+  ) %>%
+  
+  # Step B: Aggregate the Frequencies
+  # Group by county info, total pop, and our new simplified demographics
+  group_by(state, county, county_fips, total_population, race, sex, age_group) %>%
+  summarize(Frequency = sum(Frequency, na.rm = TRUE), .groups = "drop") %>%
+  
+  # Step C: Create a combined category name for our new columns
+  # Example output: "race1_sex0_AgeBucket1"
+  mutate(
+    category_name = paste0("race", race, "_sex", sex, "_", age_group)
+  ) %>%
+  
+  # Step D: Pivot from long to wide!
+  select(-race, -sex, -age_group) %>%
+  pivot_wider(
+    names_from = category_name,
+    values_from = Frequency,
+    values_fill = list(Frequency = 0) # Fills missing combinations with 0
+  ) %>%
+  
+  # Step E: Recalculate the ratios for all our new wide columns
+  mutate(
+    across(starts_with("race"), ~ . / total_population, .names = "{.col}_ratio")
+  )
+
+# Take a look at your new model-ready dataset!
+head(county_wide)
+
+```
+
 What are the metrics for the in-year models?
 
 ```{r}

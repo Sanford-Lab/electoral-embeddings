@@ -64,19 +64,54 @@ window.document.addEventListener("DOMContentLoaded", function (_event) {
     }
   };
 
+<<<<<<< Updated upstream
   // fire slideEnter for bootstrap tab activations (for htmlwidget resize behavior)
   function fireSlideEnter(e) {
+=======
+  // dispatch for htmlwidgets
+  // they use slideenter event to trigger resize
+  function fireSlideEnter() {
+>>>>>>> Stashed changes
     const event = window.document.createEvent("Event");
     event.initEvent("slideenter", true, true);
     window.document.dispatchEvent(event);
   }
+<<<<<<< Updated upstream
+=======
+
+>>>>>>> Stashed changes
   const tabs = window.document.querySelectorAll('a[data-bs-toggle="tab"]');
   tabs.forEach((tab) => {
     tab.addEventListener("shown.bs.tab", fireSlideEnter);
   });
 
+<<<<<<< Updated upstream
   // fire slideEnter for tabby tab activations (for htmlwidget resize behavior)
   document.addEventListener("tabby", fireSlideEnter, false);
+=======
+  // dispatch for shiny
+  // they use BS shown and hidden events to trigger rendering
+  function distpatchShinyEvents(previous, current) {
+    if (window.jQuery) {
+      if (previous) {
+        window.jQuery(previous).trigger("hidden");
+      }
+      if (current) {
+        window.jQuery(current).trigger("shown");
+      }
+    }
+  }
+
+  // tabby.js listener: Trigger event for htmlwidget and shiny
+  document.addEventListener(
+    "tabby",
+    function (event) {
+      fireSlideEnter();
+      distpatchShinyEvents(event.detail.previousTab, event.detail.tab);
+    },
+    false
+  );
+>>>>>>> Stashed changes
 
   // Track scrolling and mark TOC links as active
   // get table of contents and sidebar (bail if we don't have at least one)
@@ -236,9 +271,16 @@ window.document.addEventListener("DOMContentLoaded", function (_event) {
         for (const listingPath of listingPaths) {
           const pathWithoutLeadingSlash = listingPath.listing.substring(1);
           for (const item of listingPath.items) {
+<<<<<<< Updated upstream
             if (
               item === currentPagePath ||
               item === currentPagePath + "index.html"
+=======
+            const encodedItem = encodeURI(item);
+            if (
+              encodedItem === currentPagePath ||
+              encodedItem === currentPagePath + "index.html"
+>>>>>>> Stashed changes
             ) {
               // Resolve this path against the offset to be sure
               // we already are using the correct path to the listing
@@ -740,7 +782,11 @@ window.document.addEventListener("DOMContentLoaded", function (_event) {
 
     // See if there is an active child to this element
     let hasActiveChild = false;
+<<<<<<< Updated upstream
     for (child of el.children) {
+=======
+    for (const child of el.children) {
+>>>>>>> Stashed changes
       hasActiveChild = walk(child, depth) || hasActiveChild;
     }
 
@@ -800,6 +846,7 @@ window.document.addEventListener("DOMContentLoaded", function (_event) {
   highlightReaderToggle(isReaderMode());
 });
 
+<<<<<<< Updated upstream
 // grouped tabsets
 window.addEventListener("pageshow", (_event) => {
   function getTabSettings() {
@@ -892,6 +939,9 @@ window.addEventListener("pageshow", (_event) => {
     }
   }
 });
+=======
+tabsets.init();
+>>>>>>> Stashed changes
 
 function throttle(func, wait) {
   let waiting = false;
